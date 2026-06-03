@@ -1,0 +1,338 @@
+{
+  "name": "zeta",
+  "displayName": "zeta",
+  "version": "1.2.0",
+  "icon": "./public/icon.png",
+  "description": "A modern toolkit for VS Code.",
+  "categories": [
+    "Other"
+  ],
+  "repository": "https://github.com/lo0kie/zeta",
+  "license": "MIT",
+  "author": "lo0kie",
+  "publisher": "lo0kie",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsup src/index.ts --watch --external vscode",
+    "build": "tsup src/index.ts --minify --external vscode",
+    "package": "pnpm build && vsce package",
+    "format": "prettier ./**/*.{js,ts} -w -u --cache",
+    "lint": "eslint ./src/**/* --fix --cache"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "zeta.open.defaultBrowser",
+        "title": "在默认浏览器打开",
+        "icon": "$(globe)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.open.currentWindow",
+        "title": "在当前窗口中打开",
+        "icon": "$(folder)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.open.newWindow",
+        "title": "在新窗口中打开",
+        "icon": "$(link-external)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.language.wrap",
+        "title": "插入标签",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.other.scriptRunner",
+        "title": "在终端打开",
+        "icon": "$(terminal)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.other.changeCase",
+        "title": "修改单词格式",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.other.packageScript",
+        "title": "查找脚本运行",
+        "icon": "$(package)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.other.addToWorkspace",
+        "title": "添加到工作区",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.other.refresh",
+        "title": "刷新视图",
+        "icon": "$(refresh)",
+        "category": "zeta"
+      }
+    ],
+    "configuration": {
+      "title": "zeta",
+      "properties": {
+        "zeta.show.fileSize": {
+          "type": "boolean",
+          "description": "是否在状态栏显示文件大小",
+          "default": true
+        },
+        "zeta.show.memory": {
+          "type": "boolean",
+          "description": "是否在状态栏显示内存占用",
+          "default": true
+        },
+        "zeta.string.tag": {
+          "type": "string",
+          "description": "插入标签时填充的标签",
+          "default": "div"
+        },
+        "zeta.list.exts": {
+          "type": "array",
+          "description": "查询跳转时自动检索后缀名",
+          "items": {
+            "type": "string",
+            "uniqueItems": true
+          },
+          "default": [
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".vue"
+          ]
+        },
+        "zeta.list.alias": {
+          "type": "object",
+          "description": "路径跳转的别名映射, ${root}代表工作区根目录",
+          "default": {
+            "@": "${root}/src",
+            "~": "${root}"
+          }
+        },
+        "zeta.list.folders": {
+          "type": "array",
+          "description": "explorer需要检索的目录",
+          "items": {
+            "type": "string",
+            "uniqueItems": true
+          },
+          "default": []
+        },
+        "zeta.list.filterFolders": {
+          "type": "array",
+          "description": "explorer中过滤的关键字",
+          "items": {
+            "type": "string",
+            "uniqueItems": true
+          },
+          "default": [
+            "node_modules",
+            ".vscode",
+            ".git",
+            ".svn"
+          ]
+        },
+        "zeta.show.explorer": {
+          "type": "boolean",
+          "description": "是否显示资源视图",
+          "default": true
+        },
+        "zeta.show.comment": {
+          "type": "boolean",
+          "description": "是否在打开空文件时生成注释",
+          "default": true
+        },
+        "zeta.show.description": {
+          "type": "boolean",
+          "description": "是否在资源视图中显示额外的信息",
+          "default": true
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "key": "alt+shift+w",
+        "command": "zeta.language.wrap",
+        "when": "editorIsOpen && editorLangId =~ /^(vue|html|javascriptreact|typescriptreact)$/ && !editorReadonly"
+      },
+      {
+        "key": "ctrl+alt+shift+r",
+        "command": "zeta.other.packageScript",
+        "when": "workspaceFolderCount > 0 && resourceScheme != git && resourceScheme != untitled"
+      },
+      {
+        "key": "alt+shift+e",
+        "command": "zeta.other.changeCase",
+        "when": "editorIsOpen && !editorReadonly"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "zeta.other.refresh",
+          "group": "navigation@0",
+          "when": "view == zeta-explorer"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "zeta.open.defaultBrowser",
+          "group": "navigation@3",
+          "when": "viewItem =~ /file-.*\\.html?$/"
+        },
+        {
+          "command": "zeta.other.addToWorkspace",
+          "group": "navigation@5",
+          "when": "viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.open.currentWindow",
+          "group": "inline@1",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.open.newWindow",
+          "group": "inline@2",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.other.scriptRunner",
+          "group": "inline@0",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.open.newWindow",
+          "group": "navigation@0",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.open.currentWindow",
+          "group": "navigation@1",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.other.packageScript",
+          "group": "2_workspace@1",
+          "when": "view == zeta-explorer && viewItem =~ /(^directory-)|(^file-package\\.json$)/"
+        },
+        {
+          "command": "zeta.other.scriptRunner",
+          "group": "2_workspace@0",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "zeta.open.defaultBrowser",
+          "group": "navigation@1",
+          "when": "editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "zeta.open.defaultBrowser",
+          "group": "navigation@0",
+          "when": "resourceLangId in zeta.htmlId"
+        },
+        {
+          "command": "zeta.open.newWindow",
+          "group": "2_workspace@0",
+          "when": "!explorerResourceIsRoot && explorerResourceIsFolder"
+        },
+        {
+          "command": "zeta.other.packageScript",
+          "group": "2_workspace@1",
+          "when": "explorerResourceIsRoot || resourceFilename == package.json || explorerResourceIsFolder"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "zeta.open.defaultBrowser",
+          "group": "navigation@0",
+          "when": "editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "zeta.other.refresh",
+          "when": "false"
+        },
+        {
+          "command": "zeta.language.wrap",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|html|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.open.currentWindow",
+          "when": "false"
+        },
+        {
+          "command": "zeta.open.newWindow",
+          "when": "false"
+        },
+        {
+          "command": "zeta.other.changeCase",
+          "when": "editorIsOpen && !editorReadonly"
+        },
+        {
+          "command": "zeta.other.packageScript",
+          "when": "workspaceFolderCount > 1"
+        },
+        {
+          "command": "zeta.other.scriptRunner",
+          "when": "false"
+        },
+        {
+          "command": "zeta.other.addToWorkspace",
+          "when": "false"
+        },
+        {
+          "command": "zeta.open.defaultBrowser",
+          "when": "editorIsOpen && editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+        }
+      ]
+    },
+    "views": {
+      "zeta-view": [
+        {
+          "id": "zeta-explorer",
+          "name": "Explorer",
+          "contextualTitle": "资源视图",
+          "when": "config.zeta.show.explorer",
+          "icon": "$(files)",
+          "type": "tree"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "zeta-view",
+          "title": "树视图",
+          "icon": "$(list-filter)"
+        }
+      ]
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "dependencies": {
+    "comment-parser": "^1.4.1",
+    "vscode-uri": "^3.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "20",
+    "@types/vscode": "^1.85.0",
+    "prettier": "^3.2.4",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  }
+}
