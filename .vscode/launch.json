@@ -10,7 +10,7 @@
         "--disable-extensions",
         "${workspaceFolder}/playground"
       ],
-      "outFiles": ["${workspaceFolder}/lib/**/*.js"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "${defaultBuildTask}"
     }
   ]

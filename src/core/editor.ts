@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
 
-export default class Editor implements vscode.Disposable {
+/**
+ * WorkspaceEdit 的链式门面：收集对一个文档的全部编辑后一次性原子应用。
+ * 同一实例 apply 后会重置内部编辑集，可安全复用。
+ */
+export default class Editor {
   private _edit = new vscode.WorkspaceEdit();
 
   constructor(private _uri: vscode.Uri) {}
-
-  public dispose(): void {
-    // 留作后续销毁钩子
-  }
 
   insert(position: vscode.Position, newText: string): this;
   insert(positions: vscode.Position[], newTexts: string[] | string): this;
@@ -30,20 +30,6 @@ export default class Editor implements vscode.Disposable {
     return this;
   }
 
-  delete(range: vscode.Range): this;
-  delete(ranges: vscode.Range[]): this;
-  delete(startLine: number, startCharacter: number, endLine: number, endCharacter: number): this;
-  public delete(first: vscode.Range | vscode.Range[] | number, second?: number, third?: number, fourth?: number): this {
-    if (Array.isArray(first)) {
-      for (const range of first) this._edit.delete(this._uri, range);
-    } else if (typeof first === 'number' && second !== undefined && third !== undefined && fourth !== undefined) {
-      this._edit.delete(this._uri, new vscode.Range(first, second, third, fourth));
-    } else if (first instanceof vscode.Range) {
-      this._edit.delete(this._uri, first);
-    }
-    return this;
-  }
-
   replace(range: vscode.Range, newText: string): this;
   replace(ranges: vscode.Range[], newTexts: string[] | string): this;
   replace(startPosition: vscode.Position, endPosition: vscode.Position, newText: string): this;
@@ -56,28 +42,28 @@ export default class Editor implements vscode.Disposable {
     fifth?: string
   ): this {
     if (first instanceof vscode.Range && typeof second === 'string') {
-      this.delete(first).insert(first.start, second);
+      this._edit.replace(this._uri, first, second);
     } else if (Array.isArray(first)) {
       for (const [index, item] of first.entries()) {
         const text = Array.isArray(second) ? second[index] : (second as string);
-        this.delete(item).insert(item.start, text);
+        this._edit.replace(this._uri, item, text);
       }
     } else if (first instanceof vscode.Position && second instanceof vscode.Position && typeof third === 'string') {
-      this.delete(new vscode.Range(first, second)).insert(first, third);
+      this._edit.replace(this._uri, new vscode.Range(first, second), third);
     } else if (
       typeof first === 'number' &&
       typeof second === 'number' &&
       typeof third === 'number' &&
       typeof fourth === 'number'
     ) {
-      this.delete(new vscode.Range(first, second, third, fourth)).insert(first, second, fifth ?? '');
+      this._edit.replace(this._uri, new vscode.Range(first, second, third, fourth), fifth ?? '');
     }
     return this;
   }
 
   public async apply(): Promise<boolean> {
     const success = await vscode.workspace.applyEdit(this._edit);
-    this.dispose();
+    this._edit = new vscode.WorkspaceEdit();
     return success;
   }
 }
