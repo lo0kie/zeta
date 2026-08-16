@@ -64,6 +64,9 @@ export default class Editor {
   public async apply(): Promise<boolean> {
     const success = await vscode.workspace.applyEdit(this._edit);
     this._edit = new vscode.WorkspaceEdit();
+    if (!success) {
+      console.warn('[zeta] applyEdit 失败，可能存在重叠的编辑范围或文档已变更');
+    }
     return success;
   }
 }

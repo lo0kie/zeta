@@ -1,6 +1,7 @@
 import { registerCommands } from '@/commands';
 import { registerEvents } from '@/events';
 import { ExplorerTreeViewProvider } from '@/explorer/provider';
+import { TerminalToggleStatusItem } from '@/statusbar/terminal-toggle';
 import * as vscode from 'vscode';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -11,11 +12,13 @@ export function activate(context: vscode.ExtensionContext) {
   const explorerTreeView = vscode.window.createTreeView('zeta-explorer', {
     showCollapseAll: true,
     treeDataProvider: explorerProvider,
+    dragAndDropController: explorerProvider,
   });
 
   context.subscriptions.push(
     explorerTreeView,
     explorerTreeView.onDidChangeVisibility(({ visible }) => explorerProvider.refresh(visible)),
+    new TerminalToggleStatusItem(),
     ...registerCommands({ explorerProvider }),
     registerEvents(explorerProvider)
   );

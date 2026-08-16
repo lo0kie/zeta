@@ -16,21 +16,3 @@ export async function openInDefaultBrowser(arg?: unknown): Promise<void> {
     vscode.env.openExternal(uri);
   }
 }
-
-export async function addToWorkspace(arg?: unknown): Promise<void> {
-  const candidates = (Array.isArray(arg) ? arg : [arg]).map(resolveUriArgument);
-  const known = new Set((vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.toString()));
-
-  // 并发探测；已在工作区中的目录不重复添加，合法目录合并为一次 updateWorkspaceFolders 调用
-  const additions = (
-    await Promise.all(
-      candidates.map(async candidate => {
-        if (!candidate || known.has(candidate.toString())) return undefined;
-        return (await isDirectory(candidate)) ? { uri: candidate } : undefined;
-      })
-    )
-  ).filter((addition): addition is { uri: vscode.Uri } => !!addition);
-
-  if (additions.length === 0) return;
-  vscode.workspace.updateWorkspaceFolders(vscode.workspace.workspaceFolders?.length ?? 0, 0, ...additions);
-}

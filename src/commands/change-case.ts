@@ -1,5 +1,6 @@
 import { Configuration } from '@/core/configuration';
 import Editor from '@/core/editor';
+import { wordTransformers } from '@/utils/case';
 import * as vscode from 'vscode';
 
 interface TransformStep {
@@ -7,56 +8,6 @@ interface TransformStep {
   replacement: string;
   flags?: string;
 }
-
-// 零依赖正则转换引擎（按使用频率排序，Upper/Lower 优先）
-const wordTransformers: Record<string, (text: string) => string> = {
-  'Upper Case': s => s.replace(/[-_\s]+/g, '').toUpperCase(),
-  'Lower Case': s => s.replace(/[-_\s]+/g, '').toLowerCase(),
-  'Camel Case': s =>
-    s.replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : '')).replace(/^./, c => c.toLowerCase()),
-  'Pascal Case': s =>
-    s.replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : '')).replace(/^./, c => c.toUpperCase()),
-  'Snake Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1_$2')
-      .replace(/[\s\-]+/g, '_')
-      .toLowerCase(),
-  'Constant Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1_$2')
-      .replace(/[\s\-]+/g, '_')
-      .toUpperCase(),
-  'Kebab Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1-$2')
-      .replace(/[\s_]+/g, '-')
-      .toLowerCase(),
-  'Header Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1-$2')
-      .replace(/[-_\s]+/g, '-')
-      .replace(/(^|-)([a-z])/g, (_, sep: string, c: string) => sep + c.toUpperCase()),
-  'Title Case': s =>
-    s.replace(/[-_\s]+(.)?/g, (_, c) => (c ? ' ' + c.toUpperCase() : '')).replace(/^./, c => c.toUpperCase()),
-  'Sentence Case': s => {
-    const normalized = s
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/[-_\s]+/g, ' ')
-      .trim()
-      .toLowerCase();
-    return normalized.replace(/^./, c => c.toUpperCase());
-  },
-  'Dot Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1.$2')
-      .replace(/[\s_-]+/g, '.')
-      .toLowerCase(),
-  'Path Case': s =>
-    s
-      .replace(/([a-z])([A-Z])/g, '$1/$2')
-      .replace(/[\s_-]+/g, '/')
-      .toLowerCase(),
-};
 
 /**
  * 从 zeta.case.custom 配置构建自定义转换器；
@@ -102,14 +53,50 @@ interface CaseQuickPickItem extends vscode.QuickPickItem {
   name: string;
 }
 
+/** 把转换器应用到全部选区（空选区取光标所在单词，多光标去重） */
+export async function applyTransformerToSelections(
+  textEditor: vscode.TextEditor,
+  transformer: (text: string) => string,
+  selectTransformed = false
+): Promise<void> {
+  const { selections, document } = textEditor;
+  const editorEdit = new Editor(document.uri);
+  const processedKeys = new Set<string>();
+  const updatedSelections: vscode.Selection[] = [];
+  let hasChanges = false;
+  for (const selection of selections) {
+    const range = selection.isEmpty ? document.getWordRangeAtPosition(selection.active) : selection;
+    if (!range) continue;
+    const uniqueKey = `${range.start.line}-${range.start.character}-${range.end.line}-${range.end.character}`;
+    if (processedKeys.has(uniqueKey)) continue;
+    processedKeys.add(uniqueKey);
+    const originalText = document.getText(range);
+    const transformedText = transformer(originalText);
+    if (originalText !== transformedText) {
+      editorEdit.replace(range, transformedText);
+      hasChanges = true;
+    }
+    const endPosition =
+      range.start.line === range.end.line ? range.start.translate(0, transformedText.length) : range.end;
+    updatedSelections.push(new vscode.Selection(range.start, endPosition));
+  }
+  if (hasChanges) {
+    const applied = await editorEdit.apply();
+    if (applied && selectTransformed && updatedSelections.length > 0) {
+      textEditor.selections = updatedSelections;
+    }
+  } else if (selectTransformed && updatedSelections.length > 0) {
+    textEditor.selections = updatedSelections;
+  }
+}
+
 export default async function changeCase(
   textEditor: vscode.TextEditor,
   _edit: vscode.TextEditorEdit,
   caseFromConfig?: string
 ) {
-  const { selections, document } = textEditor;
   const sampleText = getSampleText(textEditor);
-  const transformers = { ...wordTransformers, ...buildCustomTransformers() };
+  const transformers: Record<string, (text: string) => string> = { ...wordTransformers, ...buildCustomTransformers() };
 
   // 主标题展示转换结果，副标题展示格式名；按格式名回查转换器
   const transformerKey =
@@ -125,29 +112,5 @@ export default async function changeCase(
       ?.then(picked => picked?.name));
 
   if (!transformerKey || !transformers[transformerKey]) return;
-  const transformer = transformers[transformerKey];
-
-  const editorEdit = new Editor(document.uri);
-  const processedKeys = new Set<string>();
-  let hasChanges = false;
-
-  for (const selection of selections) {
-    const range = selection.isEmpty ? document.getWordRangeAtPosition(selection.active) : selection;
-    if (!range) continue;
-
-    const uniqueKey = `${range.start.line}-${range.start.character}-${range.end.line}-${range.end.character}`;
-    if (processedKeys.has(uniqueKey)) continue;
-    processedKeys.add(uniqueKey);
-
-    const originalText = document.getText(range);
-    const transformedText = transformer(originalText);
-
-    if (originalText !== transformedText) {
-      editorEdit.replace(range, transformedText);
-      hasChanges = true;
-    }
-  }
-
-  // 所有选区都无需转换时跳过空提交
-  if (hasChanges) await editorEdit.apply();
+  await applyTransformerToSelections(textEditor, transformers[transformerKey], true);
 }

@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import * as vscode from 'vscode';
 
 /** 取 uri 路径段的最后一段（等价于 vscode-uri 的 Utils.basename，零依赖实现） */
@@ -8,6 +9,18 @@ export function basename(uri: vscode.Uri): string {
 /** 取父目录 uri（等价于 vscode-uri 的 Utils.dirname，零依赖实现） */
 export function dirname(uri: vscode.Uri): vscode.Uri {
   return vscode.Uri.joinPath(uri, '..');
+}
+
+/**
+ * 解析用户在 zeta.list.folders 中配置的目录：
+ * 绝对路径直接使用，相对路径基于第一个工作区根目录。
+ */
+export function resolveConfiguredFolderUri(folder: string): vscode.Uri {
+  const normalized = folder.replace(/\\/g, '/');
+  if (isAbsolute(normalized)) return vscode.Uri.file(normalized);
+
+  const rootUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+  return rootUri ? vscode.Uri.joinPath(rootUri, normalized) : vscode.Uri.file(normalized);
 }
 
 /** stat 的安全封装：路径不存在或不可访问时返回 undefined，而不是抛异常 */

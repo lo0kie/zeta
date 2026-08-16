@@ -1,0 +1,10 @@
+.vscode/**
+src/**
+playground/**
+generate_all_code.cjs
+all_code.txt
+.readme-patch.cjs
+.gitignore
+pnpm-lock.yaml
+pnpm-workspace.yaml
+tsconfig.json

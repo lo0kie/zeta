@@ -39,3 +39,20 @@ export async function runInTerminal({
 
   return terminal;
 }
+
+/**
+ * 状态栏终端切换：面板可见则收起，不可见则弹出，纯二值、不依赖焦点状态。
+ *
+ * 核心是 workbench.action.togglePanel（Ctrl+J 同款命令）：它对底部面板做无状态切换，
+ * 面板重新弹出时会恢复上次的视图（即终端），因此不需要探测面板当前是否可见——
+ * activeTerminal/closePanel 方案的问题在于终端实例在面板隐藏后仍被保留，
+ * 无法作为可见性信号。仅当工作区还没有任何终端实例时改用 toggleTerminal
+ * 负责创建并聚焦第一个终端。
+ */
+export async function toggleTerminal(): Promise<void> {
+  const hasTerminal = vscode.window.terminals.length > 0;
+
+  await vscode.commands.executeCommand(
+    hasTerminal ? 'workbench.action.togglePanel' : 'workbench.action.terminal.toggleTerminal'
+  );
+}

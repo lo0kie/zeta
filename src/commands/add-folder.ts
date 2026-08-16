@@ -1,4 +1,4 @@
-import { Configuration } from '@/core/configuration';
+import { appendConfiguredFolders } from '@/explorer/folders';
 import * as vscode from 'vscode';
 
 /**
@@ -15,9 +15,5 @@ export default async function addFolder(): Promise<void> {
   });
   if (!picked || picked.length === 0) return;
 
-  const existing = Configuration.FOLDERS;
-  const additions = picked.map(uri => uri.fsPath).filter(fsPath => !existing.includes(fsPath));
-  if (additions.length === 0) return;
-
-  await Configuration.set('folders', [...existing, ...additions]);
+  await appendConfiguredFolders(picked);
 }

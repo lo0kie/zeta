@@ -8,6 +8,7 @@ type ConfigTypeMap = {
   filterFolders: string[];
   folders: string[];
   tag: string;
+  terminal: boolean;
 };
 
 // 配置键名与默认值的唯一事实来源，package.json 中的贡献声明与此保持一致
@@ -17,6 +18,7 @@ const configDefinitions = {
   filterFolders: { key: 'zeta.list.filterFolders', default: ['node_modules', '.vscode', '.git', '.svn'] },
   folders: { key: 'zeta.list.folders', default: [] as string[] },
   tag: { key: 'zeta.string.tag', default: 'div' },
+  terminal: { key: 'zeta.show.terminal', default: true },
 } satisfies { [K in keyof ConfigTypeMap]: { key: string; default: ConfigTypeMap[K] } };
 
 export class Configuration {
@@ -29,7 +31,9 @@ export class Configuration {
       return (Array.isArray(value) ? value : fallback) as ConfigTypeMap[K];
     }
     if (typeof fallback === 'object') {
-      return (typeof value === 'object' && value !== null && !Array.isArray(value) ? value : fallback) as ConfigTypeMap[K];
+      return (
+        typeof value === 'object' && value !== null && !Array.isArray(value) ? value : fallback
+      ) as ConfigTypeMap[K];
     }
     return (typeof value === typeof fallback ? value : fallback) as ConfigTypeMap[K];
   }
@@ -52,5 +56,8 @@ export class Configuration {
   }
   static get TAG() {
     return this.get('tag');
+  }
+  static get TERMINAL() {
+    return this.get('terminal');
   }
 }

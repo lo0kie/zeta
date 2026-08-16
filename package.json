@@ -1,7 +1,7 @@
 {
   "name": "zeta",
   "displayName": "zeta",
-  "version": "1.3.4",
+  "version": "1.5.0",
   "icon": "./public/icon.png",
   "description": "A modern toolkit for VS Code.",
   "categories": [
@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "tsup src/index.ts --watch --external vscode",
     "build": "tsup src/index.ts --minify --external vscode",
+    "generate-code": "node ./generate_all_code.cjs",
     "package": "pnpm build && vsce package --no-dependencies",
     "format": "prettier \"src/**/*.{js,ts}\" -w -u --cache"
   },
@@ -61,11 +62,6 @@
         "category": "zeta"
       },
       {
-        "command": "zeta.folder.addToWorkspace",
-        "title": "添加到工作区",
-        "category": "zeta"
-      },
-      {
         "command": "zeta.explorer.refresh",
         "title": "刷新视图",
         "icon": "$(refresh)",
@@ -75,6 +71,48 @@
         "command": "zeta.explorer.addFolder",
         "title": "添加检索目录",
         "icon": "$(new-folder)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.terminal.toggle",
+        "title": "切换终端显示",
+        "icon": "$(terminal)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.removeFolder",
+        "title": "从导航中移除",
+        "icon": "$(trash)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.cycleCase",
+        "title": "循环切换单词格式",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.wrapConsole",
+        "title": "包裹为 console.log",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.wrapTryCatch",
+        "title": "包裹为 try/catch",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.wrapIf",
+        "title": "包裹为 if 语句",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.unwrapTags",
+        "title": "移除外层标签",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.cycleQuotes",
+        "title": "切换引号 (' / \" / `)",
         "category": "zeta"
       }
     ],
@@ -143,6 +181,11 @@
           "type": "boolean",
           "description": "是否显示资源导航",
           "default": true
+        },
+        "zeta.show.terminal": {
+          "type": "boolean",
+          "description": "是否显示状态栏终端切换按钮",
+          "default": true
         }
       }
     },
@@ -161,6 +204,11 @@
         "key": "alt+shift+e",
         "command": "zeta.editor.changeCase",
         "when": "editorHasSelection && !editorReadonly"
+      },
+      {
+        "key": "alt+shift+c",
+        "command": "zeta.editor.cycleCase",
+        "when": "editorIsOpen && !editorReadonly && editorHasSelection"
       }
     ],
     "menus": {
@@ -206,13 +254,18 @@
           "command": "zeta.folder.openInWindow",
           "group": "navigation@1",
           "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.removeFolder",
+          "group": "navigation@2",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-root-/"
         }
       ],
       "editor/title": [
         {
           "command": "zeta.file.openInBrowser",
           "group": "navigation@1",
-          "when": "editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+          "when": "editorLangId in zeta.htmlId && resourceScheme != untitled"
         }
       ],
       "explorer/context": [
@@ -226,7 +279,7 @@
         {
           "command": "zeta.file.openInBrowser",
           "group": "navigation@0",
-          "when": "editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+          "when": "editorLangId in zeta.htmlId && resourceScheme != untitled"
         }
       ],
       "commandPalette": [
@@ -252,19 +305,47 @@
         },
         {
           "command": "zeta.folder.runScript",
-          "when": "workspaceFolderCount > 1"
+          "when": "workspaceFolderCount > 0 && resourceScheme != git && resourceScheme != untitled"
         },
         {
           "command": "zeta.folder.openInTerminal",
           "when": "false"
         },
         {
-          "command": "zeta.folder.addToWorkspace",
+          "command": "zeta.file.openInBrowser",
+          "when": "editorIsOpen && editorLangId in zeta.htmlId && resourceScheme != untitled"
+        },
+        {
+          "command": "zeta.explorer.removeFolder",
           "when": "false"
         },
         {
-          "command": "zeta.file.openInBrowser",
-          "when": "editorIsOpen && editorLangId in zeta.htmlId && resourceScheme =~ /^[^untitled]/"
+          "command": "zeta.explorer.addFolder",
+          "when": "config.zeta.show.explorer"
+        },
+        {
+          "command": "zeta.editor.cycleCase",
+          "when": "editorIsOpen && !editorReadonly && editorHasSelection"
+        },
+        {
+          "command": "zeta.editor.wrapConsole",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.editor.wrapTryCatch",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.editor.wrapIf",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.editor.unwrapTags",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|html|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.editor.cycleQuotes",
+          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
         }
       ]
     },

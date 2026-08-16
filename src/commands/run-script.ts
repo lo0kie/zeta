@@ -5,6 +5,37 @@ import { runInTerminal } from './terminal';
 
 const MISSING_PACKAGE_JSON = '未能在当前上下文中找到 package.json 文件';
 
+const KNOWN_PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+
+const LOCK_FILE_MANAGERS: Record<string, string> = {
+  'pnpm-lock.yaml': 'pnpm',
+  'yarn.lock': 'yarn',
+  'bun.lockb': 'bun',
+  'bun.lock': 'bun',
+  'package-lock.json': 'npm',
+};
+
+/**
+ * 智能包管理器探测：优先读 package.json 的 packageManager 字段
+ * （corepack 格式如 "pnpm@9.1.0"，取 @ 前的名字），
+ * 未声明时嗅探同目录锁文件，最终回落 npm。
+ */
+async function detectPackageManager(packageJsonUri: vscode.Uri, packageManagerField?: string): Promise<string> {
+  const declared = packageManagerField?.split('@')[0];
+  if (declared && KNOWN_PACKAGE_MANAGERS.has(declared)) return declared;
+
+  try {
+    const entries = await vscode.workspace.fs.readDirectory(dirname(packageJsonUri));
+    for (const [fileName] of entries) {
+      const manager = LOCK_FILE_MANAGERS[fileName];
+      if (manager) return manager;
+    }
+  } catch {
+    // 目录读取失败时静默回落到默认值
+  }
+  return 'npm';
+}
+
 export default async function runScript(arg?: unknown): Promise<void> {
   let targetUri = resolveUriArgument(arg);
 
@@ -38,9 +69,10 @@ export default async function runScript(arg?: unknown): Promise<void> {
   }
 
   let scripts: Record<string, string> | undefined;
+  let packageManager: string | undefined;
   try {
     const rawContent = await vscode.workspace.fs.readFile(targetUri);
-    ({ scripts } = JSON.parse(new TextDecoder().decode(rawContent)) ?? {});
+    ({ scripts, packageManager } = JSON.parse(new TextDecoder().decode(rawContent)) ?? {});
   } catch {
     await vscode.window.showErrorMessage('无法正确解析该 package.json 文件');
     return;
@@ -57,10 +89,15 @@ export default async function runScript(arg?: unknown): Promise<void> {
     { placeHolder: toNormalizePath(targetUri) }
   );
   if (!picked) return;
-
+  const extraArgs = await vscode.window.showInputBox({
+    prompt: `追加参数（可选，直接回车跳过）`,
+    placeHolder: `例如: --watch`,
+  });
   const workingDir = dirname(targetUri);
-  const runCmd = `npm run ${picked.label}`;
-
+  const manager = await detectPackageManager(targetUri, packageManager);
+  const runCmd = extraArgs?.trim()
+    ? `${manager} run ${picked.label} -- ${extraArgs.trim()}`
+    : `${manager} run ${picked.label}`;
   await runInTerminal({
     cwd: workingDir,
     commands: [runCmd],
