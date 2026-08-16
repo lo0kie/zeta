@@ -12,8 +12,9 @@ interface TransformStep {
 /**
  * 从 zeta.case.custom 配置构建自定义转换器；
  * 结构非法或正则编译失败的条目跳过并告警，不影响其余格式。
+ * 导出供 cycleCase 复用同一套自定义格式。
  */
-function buildCustomTransformers(): Record<string, (text: string) => string> {
+export function buildCustomTransformers(): Record<string, (text: string) => string> {
   const transformers: Record<string, (text: string) => string> = {};
 
   for (const [name, steps] of Object.entries(Configuration.CASE_CUSTOM)) {

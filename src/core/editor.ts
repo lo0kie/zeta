@@ -65,7 +65,10 @@ export default class Editor {
     const success = await vscode.workspace.applyEdit(this._edit);
     this._edit = new vscode.WorkspaceEdit();
     if (!success) {
+      // 重叠编辑/文档并发变更会让 applyEdit 静默失败，这里同时提示用户，
+      // 避免多光标包裹/解构等场景表现为"点了没反应"
       console.warn('[zeta] applyEdit 失败，可能存在重叠的编辑范围或文档已变更');
+      vscode.window.showWarningMessage('zeta: 编辑未应用，可能存在重叠的编辑范围或文档已变更');
     }
     return success;
   }

@@ -63,16 +63,59 @@ export async function isDirectory(uri: vscode.Uri | undefined): Promise<boolean>
 export async function findRootUri(uri = vscode.window.activeTextEditor?.document.uri): Promise<vscode.Uri | undefined> {
   if (!uri) return undefined;
 
+  const workspaceRoot = vscode.workspace.getWorkspaceFolder(uri)?.uri;
   let current = dirname(uri);
+
   while (true) {
     if (await isFile(vscode.Uri.joinPath(current, 'package.json'))) {
       return current;
     }
 
+    // 到达工作区根目录或文件系统顶层时停止向上遍历，避免无谓的磁盘探测
+    if (workspaceRoot && current.toString() === workspaceRoot.toString()) break;
     const parent = dirname(current);
     if (parent.toString() === current.toString()) break;
     current = parent;
   }
 
-  return vscode.workspace.getWorkspaceFolder(uri)?.uri;
+  return workspaceRoot;
+}
+
+/**
+ * 解析 drag-and-drop 的 text/uri-list 内容为文件 Uri 列表。
+ * 手工拆解 file:// 前缀与原生路径，避免走 vscode.Uri.parse——
+ * 其内部基于 Node 的 url.parse 实现，会触发 DEP0169 弃用警告。
+ * 非 file 协议的 URI 行直接丢弃；`#` 开头的注释行与空行跳过。
+ */
+export function parseUriList(uriList: string): vscode.Uri[] {
+  const uris: vscode.Uri[] = [];
+
+  for (const line of uriList.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    if (trimmed.startsWith('file://')) {
+      let rest = trimmed.slice('file://'.length);
+      if (!rest) continue;
+
+      if (rest[0] !== '/') {
+        // UNC：file://host/share/... → //host/share/...
+        rest = `//${rest}`;
+      } else if (/^\/?[A-Za-z]:/.test(rest)) {
+        // 盘符：file:///C:/... → C:/...
+        rest = rest.slice(1);
+      }
+
+      try {
+        uris.push(vscode.Uri.file(decodeURIComponent(rest)));
+      } catch {
+        // 含非法百分号编码的行直接丢弃
+      }
+    } else if (/^[A-Za-z]:[\\/]|^[/\\]/.test(trimmed)) {
+      // 部分系统文件管理器直接提供原生路径
+      uris.push(vscode.Uri.file(trimmed));
+    }
+  }
+
+  return uris;
 }

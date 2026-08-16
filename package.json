@@ -3,9 +3,26 @@
   "displayName": "zeta",
   "version": "1.5.0",
   "icon": "./public/icon.png",
-  "description": "A modern toolkit for VS Code.",
+  "description": "一体化开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全、颜色编辑、脚本运行。零运行时依赖、无遥测。",
   "categories": [
-    "Other"
+    "Other",
+    "Snippets",
+    "Formatters"
+  ],
+  "keywords": [
+    "path completion",
+    "style completion",
+    "scss",
+    "less",
+    "color picker",
+    "rename",
+    "tags",
+    "case conversion",
+    "terminal",
+    "workspace",
+    "productivity",
+    "vue",
+    "html"
   ],
   "repository": "https://github.com/lo0kie/zeta",
   "license": "MIT",
@@ -14,9 +31,11 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsup src/index.ts --watch --external vscode",
+    "generate-code": "node ./generate-all-code.mjs",
+    "prepackage": "node ./compress-images.mjs",
     "build": "tsup src/index.ts --minify --external vscode",
-    "generate-code": "node ./generate_all_code.cjs",
     "package": "pnpm build && vsce package --no-dependencies",
+    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
     "format": "prettier \"src/**/*.{js,ts}\" -w -u --cache"
   },
   "contributes": {
@@ -154,6 +173,20 @@
             }
           }
         },
+        "zeta.case.cycleOrder": {
+          "type": "array",
+          "description": "循环切换单词格式（Alt+Shift+C）的转换顺序，格式名来自内置格式或 zeta.case.custom",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Camel Case",
+            "Kebab Case",
+            "Pascal Case",
+            "Snake Case",
+            "Constant Case"
+          ]
+        },
         "zeta.list.folders": {
           "type": "array",
           "description": "explorer需要检索的目录",
@@ -185,6 +218,11 @@
         "zeta.show.terminal": {
           "type": "boolean",
           "description": "是否显示状态栏终端切换按钮",
+          "default": true
+        },
+        "zeta.runScript.askArguments": {
+          "type": "boolean",
+          "description": "运行脚本前是否询问追加参数（如 --watch）；关闭后选中脚本直接运行",
           "default": true
         }
       }
@@ -378,7 +416,9 @@
     "@types/node": "20",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.27.7",
     "prettier": "^3.2.4",
+    "sharp": "^0.35.3",
     "tsup": "^8.0.1",
     "typescript": "^5.3.3"
   },

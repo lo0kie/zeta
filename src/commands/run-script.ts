@@ -1,3 +1,4 @@
+import { Configuration } from '@/core/configuration';
 import { basename, dirname, findRootUri, isFile, resolveUriArgument } from '@/core/fs';
 import { toNormalizePath } from '@/core/strings';
 import * as vscode from 'vscode';
@@ -88,16 +89,26 @@ export default async function runScript(arg?: unknown): Promise<void> {
     scriptNames.map(label => ({ label, detail: scripts![label] })),
     { placeHolder: toNormalizePath(targetUri) }
   );
+
   if (!picked) return;
-  const extraArgs = await vscode.window.showInputBox({
-    prompt: `追加参数（可选，直接回车跳过）`,
-    placeHolder: `例如: --watch`,
-  });
+
+  // zeta.runScript.askArguments 关闭时跳过询问，选中脚本直接运行
+  let extraArgs: string | undefined;
+  if (Configuration.RUN_SCRIPT_ASK_ARGUMENTS) {
+    extraArgs = await vscode.window.showInputBox({
+      prompt: `追加参数（可选，直接回车跳过）`,
+      placeHolder: `例如: --watch`,
+    });
+    if (extraArgs === undefined) return;
+  }
+
   const workingDir = dirname(targetUri);
   const manager = await detectPackageManager(targetUri, packageManager);
+
   const runCmd = extraArgs?.trim()
     ? `${manager} run ${picked.label} -- ${extraArgs.trim()}`
     : `${manager} run ${picked.label}`;
+
   await runInTerminal({
     cwd: workingDir,
     commands: [runCmd],

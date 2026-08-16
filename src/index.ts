@@ -1,6 +1,10 @@
 import { registerCommands } from '@/commands';
 import { registerEvents } from '@/events';
 import { ExplorerTreeViewProvider } from '@/explorer/provider';
+import { registerPathCompletion } from '@/providers/path-completion';
+import { clearColorCache, registerStyleColor } from '@/providers/style-color';
+import { clearStyleDocCache, clearStyleFileCache, registerStyleCompletion } from '@/providers/style-completion';
+import { registerStyleHover } from '@/providers/style-hover';
 import { TerminalToggleStatusItem } from '@/statusbar/terminal-toggle';
 import * as vscode from 'vscode';
 
@@ -16,6 +20,19 @@ export function activate(context: vscode.ExtensionContext) {
   });
 
   context.subscriptions.push(
+    registerPathCompletion(),
+    registerStyleCompletion(),
+    registerStyleColor(),
+    registerStyleHover(),
+    // 文档关闭即释放文档级缓存（样式解析 / 颜色结果），避免长期运行内存累积
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      clearStyleDocCache(doc.uri);
+      clearColorCache(doc.uri);
+    }),
+    // 样式文件保存后立刻失效其原文/符号/文档级缓存，避免 TTL 窗口内补全与悬浮用旧值
+    vscode.workspace.onDidSaveTextDocument(doc => {
+      if (/\.(less|css|scss|sass|stylus)$/i.test(doc.uri.fsPath)) clearStyleFileCache(doc.uri);
+    }),
     explorerTreeView,
     explorerTreeView.onDidChangeVisibility(({ visible }) => explorerProvider.refresh(visible)),
     new TerminalToggleStatusItem(),

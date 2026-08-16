@@ -219,6 +219,13 @@ function escapeStringContent(content: string, fromQuote: string, toQuote: string
   return result;
 }
 
+// 拼接链中的一个操作数：字符串/模板字面量（可带转义）、点号标识符路径或数字。
+// 限定操作数形态，避免把 `const x = 'a'` 这类赋值前缀误吞进链里。
+const CHAIN_TERM_SRC = String.raw`(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\`(?:[^\`\\]|\\.)*\`|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*|\d+(?:\.\d+)?)`;
+
+// 模块级常量避免每次调用重复编译；使用前手动重置 lastIndex，等效避免共享实例污染
+const CONCAT_CHAIN_REGEXP = new RegExp(`${CHAIN_TERM_SRC}(?:\\s*\\+\\s*${CHAIN_TERM_SRC})+`, 'g');
+
 export function findConcatenationChain(
   lineText: string,
   lineStartOffset: number,
@@ -226,45 +233,27 @@ export function findConcatenationChain(
 ): { start: number; end: number; raw: string } | null {
   const relStart = token.start - lineStartOffset;
   const relEnd = token.end - lineStartOffset;
-  let left = relStart;
-  while (left > 0) {
-    const prevText = lineText.slice(0, left).trimEnd();
-    if (prevText.endsWith('+')) {
-      const plusIdx = prevText.lastIndexOf('+');
-      left = lineText.slice(0, plusIdx).search(/\S[^\n]*$/);
-      if (left === -1) break;
-    } else {
-      break;
+
+  CONCAT_CHAIN_REGEXP.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CONCAT_CHAIN_REGEXP.exec(lineText)) !== null) {
+    if (match.index <= relStart && match.index + match[0].length >= relEnd) {
+      return {
+        start: lineStartOffset + match.index,
+        end: lineStartOffset + match.index + match[0].length,
+        raw: match[0].trim(),
+      };
     }
   }
-  let right = relEnd;
-  while (right < lineText.length) {
-    const restText = lineText.slice(right).trimStart();
-    if (restText.startsWith('+')) {
-      const afterPlusOffset = lineText.indexOf('+', right) + 1;
-      const match = lineText.slice(afterPlusOffset).match(/^\s*([^+\n;,\)]+)/);
-      if (match) {
-        right = afterPlusOffset + match[0].length;
-      } else {
-        break;
-      }
-    } else {
-      break;
-    }
-  }
-  if (left === relStart && right === relEnd) return null;
-  return {
-    start: lineStartOffset + left,
-    end: lineStartOffset + right,
-    raw: lineText.slice(left, right).trim(),
-  };
+  return null;
 }
 
 export function convertConcatToTemplate(concatExpr: string): string {
-  const parts = concatExpr.split(/\s*\+\s*/);
+  // 用操作数正则提取项：字符串内/模板内的 + 不会被拆散（'a + b' + name → a + b${name}）
+  const terms = concatExpr.match(new RegExp(CHAIN_TERM_SRC, 'g')) ?? [];
   let result = '`';
-  for (const part of parts) {
-    const trimmed = part.trim();
+  for (const term of terms) {
+    const trimmed = term.trim();
     if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
       result += escapeStringContent(trimmed.slice(1, -1), trimmed[0], '`');
     } else if (trimmed.startsWith('`') && trimmed.endsWith('`')) {

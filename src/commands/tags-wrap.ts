@@ -17,11 +17,15 @@ function tagNameCursors(openTagStart: vscode.Position, closeTagStart: vscode.Pos
 function handleEmptyLine(selection: vscode.Selection, editor: Editor, tagName: string): TagCursors {
   const { start } = selection;
 
-  editor.insert(start, `<${tagName}>`);
-  editor.insert(start, `</${tagName}>`);
+  // 单次原子插入整个标签对：不再依赖同位置多次 insert 的顺序保证
+  editor.insert(start, `<${tagName}></${tagName}>`);
 
-  // 同位置两次插入按调用顺序排列，闭标签 `<` 位于开标签整体长度之后
-  return tagNameCursors(start, start.translate(0, tagName.length + 2), tagName);
+  // 锚点按单串索引计算：<div></div> 中开标签名末尾在 1+L，
+  // 闭标签名从 4+L 开始（> < / 各占一列）、末尾在 4+2L
+  return [
+    start.translate(0, 1 + tagName.length),
+    start.translate(0, 4 + tagName.length * 2),
+  ];
 }
 
 /** 空选区且光标停在非空行行尾：整行内容下沉一级缩进并被包裹 */

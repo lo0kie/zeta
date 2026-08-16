@@ -1,64 +1,62 @@
 # Zeta
 
-VS Code 工具集：资源导航、标签包裹、命名格式转换、脚本运行、快捷包裹、终端切换。打包后无运行时第三方依赖。
+一体化的 VS Code 开发工具集：资源导航、标签与代码结构操作、命名格式转换、智能路径/样式补全、颜色编辑、脚本运行。**零运行时依赖、无遥测、纯本地**。
 
-## 功能
+## 安装即生效（无需调用命令）
+
+以下能力注册后自动工作，无需快捷键或命令：
+
+- **路径补全** — 在 `import` / `require` / `src=` / `href=` / `url(...)` 中补全文件与目录路径。支持 tsconfig/jsconfig 的 `paths` 别名（含 `baseUrl`、多候选回退）、`index.less` 目录索引、SCSS `_partial` 约定，`.vue` / `.html` / CSS 里同样生效。
+- **样式补全** — Less 变量（`@var:`）与 Mixin（`.name(...)`）、SCSS/Sass 变量（`$var:`）与 `@mixin`、CSS 原生变量（`--var`）。导入关系递归展开（`@import` / `@use` / `@forward`），聚合文件（`index.less`）里的二级符号也能补全。
+- **样式悬浮** — 悬浮 `.class` / `#id` 展示真实选择器声明（含嵌套与复合选择器），悬浮 Less/SCSS/CSS 变量展示解析值与其定义位置。
+- **颜色选择器** — JS/TS/JSX/TSX 字符串字面量与 vue `<style>` 块内的 hex / rgb / rgba 色值显示色块，点击调起原生拾色器，支持写回 hex 或 rgb/rgba。
+
+## 命令与快捷键
+
+| 快捷键             | 命令                                | 说明                                                                                         |
+| ------------------ | ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| `Alt+Shift+W`      | 插入标签                            | Vue/HTML/JSX/TSX 中用配置的标签包裹选区，插入后选中标签名可直接改名                          |
+| —                  | 移除外层标签                        | 光标所在位置向外移除最近的标签对（含多行缩进回退）                                           |
+| `Alt+Shift+E`      | 修改单词格式                        | 弹面板：主标题预览转换结果，内置 12 种格式，支持多光标                                       |
+| `Alt+Shift+C`      | 循环切换单词格式                    | 在 `zeta.case.cycleOrder` 配置的格式间单键循环（默认 Camel→Kebab→Pascal→Snake→Constant）     |
+| —                  | 切换引号                            | 单引号 / 双引号 / 模板字符串循环切换，字符串拼接链自动合并为模板                             |
+| `Ctrl+Alt+Shift+R` | 查找脚本运行                        | 定位 package.json 选择脚本在终端运行，自动探测包管理器（packageManager 字段 → 锁文件 → npm） |
+| —                  | 包裹为 console.log / try-catch / if | 选区（空选区取整行）包进对应结构，光标落在待编辑位置                                         |
+| —                  | 在默认浏览器打开                    | 编辑器标题栏 / 右键 / 资源导航中打开 HTML                                                    |
+| —                  | 终端切换                            | 状态栏终端图标：显示当前终端数量，点击显示/收起终端面板                                      |
 
 ### 资源导航
 
-侧边栏树视图，展示 `zeta.list.folders` 中配置的目录，支持目录黑名单过滤。未配置时点击提示项可直接调起系统目录选择器；也可把工作区资源管理器或系统文件管理器里的文件夹直接拖进视图添加。根目录右键可"从导航中移除"。目录行悬停可快捷在终端打开、在当前/新窗口打开；HTML 文件可在默认浏览器打开。
+侧边栏树视图展示 `zeta.list.folders` 配置的目录：
 
-### 插入标签（Alt+Shift+W）
-
-在 Vue / HTML / JSX / TSX 中用配置的标签（默认 `div`）包裹选中内容，自动处理多行缩进，插入后选中标签名，可直接输入改名。
-
-### 快捷包裹（console / try-catch / if）
-
-命令面板执行"包裹为 console.log / try/catch / if 语句"，把当前选区（空选区时取整行）包进对应结构：console 光标落在括号后，try/catch 光标落在 catch 块内，if 会自动选中条件占位符 `true` 直接输入条件。仅限 JS / TS / JSX / TSX / Vue。
-
-### 修改单词格式（Alt+Shift+E）
-
-选中文本后弹出面板：主标题为转换结果预览，副标题为格式名。内置 Upper、Lower、Camel、Pascal、Snake、Constant、Kebab、Header、Title、Sentence、Dot、Path 十二种格式，支持多光标。
-
-快捷键 `Alt+Shift+C` 可在 camelCase / kebab-case / PascalCase / snake_case 四种常用格式间单键循环切换，无需调出面板。
-
-可通过 `zeta.case.custom` 自定义格式，多个步骤依次执行：
-
-```json
-"zeta.case.custom": {
-  "Vue Kebab": [
-    { "pattern": "([a-z])([A-Z])", "replacement": "$1-$2" },
-    { "pattern": "[\\s_]+", "replacement": "-" }
-  ]
-}
-```
-
-### 查找脚本运行（Ctrl+Alt+Shift+R）
-
-从当前上下文定位 `package.json`，选择脚本后在对应目录的终端中运行。自动检测包管理器：优先读 `packageManager` 字段，其次嗅探锁文件（pnpm-lock.yaml / yarn.lock / bun.lock / package-lock.json），对应生成 `pnpm run` / `yarn run` / `bun run` / `npm run`，默认 npm。
-
-### 终端切换
-
-状态栏左侧常驻终端图标并显示当前终端数量（无终端时仅图标），点击在显示/隐藏终端面板之间切换。可通过 `zeta.show.terminal` 关闭。
+- **添加**：视图标题栏按钮（调起系统目录选择器）或直接**拖拽**工作区/文件管理器的文件夹进视图
+- **移除**：根目录右键"从导航中移除"
+- **打开**：行内按钮/右键在当前窗口、新窗口、终端中打开；HTML 文件可在浏览器打开
+- 支持黑名单过滤（`zeta.list.filterFolders`），根目录显示父目录副标题便于区分同名目录
 
 ## 配置
 
-| 键                        | 类型      | 默认值                                        | 说明                                               |
-| ------------------------- | --------- | --------------------------------------------- | -------------------------------------------------- |
-| `zeta.string.tag`         | `string`  | `"div"`                                       | 插入标签命令使用的标签名                           |
-| `zeta.case.custom`        | `object`  | `{}`                                          | 自定义转换格式，键为格式名，值为步骤数组           |
-| `zeta.list.folders`       | `array`   | `[]`                                          | 资源导航检索的根目录，相对路径基于工作区根目录解析 |
-| `zeta.list.filterFolders` | `array`   | `["node_modules", ".vscode", ".git", ".svn"]` | 资源导航中过滤的目录名关键字                       |
-| `zeta.show.explorer`      | `boolean` | `true`                                        | 是否显示资源导航视图                               |
-| `zeta.show.terminal`      | `boolean` | `true`                                        | 是否显示状态栏终端切换按钮                         |
+| 键                            | 类型      | 默认值                                                                       | 说明                                                   |
+| ----------------------------- | --------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `zeta.string.tag`             | `string`  | `"div"`                                                                      | 插入标签命令使用的标签名                               |
+| `zeta.case.custom`            | `object`  | `{}`                                                                         | 自定义转换格式：键为格式名，值为转换步骤数组           |
+| `zeta.case.cycleOrder`        | `array`   | `["Camel Case", "Kebab Case", "Pascal Case", "Snake Case", "Constant Case"]` | 循环切换格式的顺序，可加入 `zeta.case.custom` 的格式名 |
+| `zeta.list.folders`           | `array`   | `[]`                                                                         | 资源导航根目录；相对路径基于工作区根目录解析           |
+| `zeta.list.filterFolders`     | `array`   | `["node_modules", ".vscode", ".git", ".svn"]`                                | 资源导航过滤的目录名关键字                             |
+| `zeta.show.explorer`          | `boolean` | `true`                                                                       | 是否显示资源导航视图                                   |
+| `zeta.show.terminal`          | `boolean` | `true`                                                                       | 是否显示状态栏终端切换按钮                             |
+| `zeta.runScript.askArguments` | `boolean` | `true`                                                                       | 运行脚本前是否询问追加参数（关闭后选中即运行）         |
+
+> **`zeta.list.folders` 的作用域**：在打开工作区时写入**工作区配置**（按项目隔离，不同项目的目录列表互不影响）；未打开工作区时写入全局配置。从 1.4.x 升级的用户：首次在某个项目里添加/移除目录后，该项目会从旧的全局列表"分叉"出自己的一份，之后不再跟随全局列表变化——这是预期的隔离行为。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm dev      # watch 构建
-pnpm build    # 产出 dist
-pnpm package  # 打包 vsix
+pnpm dev       # watch 构建
+pnpm test      # 运行测试（node:test，无需额外依赖）
+pnpm build     # 产出 dist
+pnpm package   # 打包 vsix
 ```
 
 ## License

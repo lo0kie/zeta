@@ -1,10 +1,13 @@
 .vscode/**
 src/**
+test/**
 playground/**
-generate_all_code.cjs
+generate-all-code.mjs
+compress-images.mjs
 all_code.txt
 .readme-patch.cjs
 .gitignore
 pnpm-lock.yaml
 pnpm-workspace.yaml
 tsconfig.json
+public/raw-icon.png

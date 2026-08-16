@@ -1,6 +1,7 @@
 import { Configuration } from '@/core/configuration';
-import { basename, isDirectory, resolveConfiguredFolderUri, statSafe } from '@/core/fs';
+import { basename, dirname, isDirectory, parseUriList, resolveConfiguredFolderUri, statSafe } from '@/core/fs';
 import { escapeRegExp } from '@/core/strings';
+import { TtlCache } from '@/core/ttl-cache';
 import { appendConfiguredFolders } from '@/explorer/folders';
 import * as vscode from 'vscode';
 
@@ -31,14 +32,21 @@ export class ExplorerTreeViewProvider
   private _baseFolders: IExplorerNode[] | null = null;
   private _baseFolderPaths = new Set<string>();
 
+  // 子节点列表短缓存：展开同一目录不反复读盘；refresh/invalidateCaches 时清空
+  private static readonly CHILD_CACHE_TTL_MS = 2000;
+  private _childCache = new TtlCache<IExplorerNode[]>(ExplorerTreeViewProvider.CHILD_CACHE_TTL_MS);
+
   /** 配置变更后调用：清空全部缓存，下一次渲染时重新读盘 */
   public invalidateCaches(): void {
     this._filterRegExp = null;
     this._baseFolders = null;
     this._baseFolderPaths.clear();
+    this._childCache.clear();
   }
 
   public refresh(visible = true): void {
+    // 用户主动刷新（视图按钮/配置变更）时清子节点缓存，确保重新读盘
+    this._childCache.clear();
     if (visible) this._onDidChangeTreeData.fire();
   }
 
@@ -51,14 +59,9 @@ export class ExplorerTreeViewProvider
     const uriList = await dataTransfer.get('text/uri-list')?.asString();
     if (!uriList) return;
 
-    const uris = uriList
-      .split(/\r?\n/)
-      .filter(line => line.length > 0 && !line.startsWith('#'))
-      .map(line => vscode.Uri.parse(line, true));
-
     const directories: vscode.Uri[] = [];
-    for (const uri of uris) {
-      if (uri.scheme === 'file' && (await isDirectory(uri))) directories.push(uri);
+    for (const uri of parseUriList(uriList)) {
+      if (await isDirectory(uri)) directories.push(uri);
     }
     await appendConfiguredFolders(directories);
   }
@@ -75,14 +78,16 @@ export class ExplorerTreeViewProvider
     const configuredFolders = Configuration.FOLDERS.filter(folder => folder.trim().length > 0);
     if (configuredFolders.length === 0) return [PLACEHOLDER_NODE];
 
-    const nodes: IExplorerNode[] = [];
-    for (const folder of configuredFolders) {
-      const uri = resolveConfiguredFolderUri(folder);
-      if ((await statSafe(uri))?.type === vscode.FileType.Directory) {
-        nodes.push({ uri, type: vscode.FileType.Directory });
-      }
-    }
-    return nodes;
+    // 各根目录的存在性检查互不依赖：并行 stat，避免多目录（尤其网络盘/慢文件系统）串行排队
+    const results = await Promise.all(
+      configuredFolders.map(async folder => {
+        const uri = resolveConfiguredFolderUri(folder);
+        return (await statSafe(uri))?.type === vscode.FileType.Directory
+          ? { uri, type: vscode.FileType.Directory }
+          : undefined;
+      })
+    );
+    return results.filter((node): node is IExplorerNode => node !== undefined);
   }
 
   public getTreeItem(element: IExplorerNode): vscode.TreeItem {
@@ -110,6 +115,8 @@ export class ExplorerTreeViewProvider
 
     if (isRoot) {
       treeItem.collapsibleState = Expanded;
+      // 根目录加父目录名作副标题：跨项目添加同名目录（两个项目都有 src）时便于区分
+      treeItem.description = basename(dirname(uri));
     } else if (type === File) {
       treeItem.command = { arguments: [uri], command: 'vscode.open', title: '打开文件' };
       treeItem.collapsibleState = None;
@@ -137,6 +144,10 @@ export class ExplorerTreeViewProvider
       return this._baseFolders;
     }
 
+    const cacheKey = element.uri.toString();
+    const cached = this._childCache.get(cacheKey);
+    if (cached) return cached;
+
     try {
       const entries = await vscode.workspace.fs.readDirectory(element.uri);
       const { File, Directory } = vscode.FileType;
@@ -155,7 +166,9 @@ export class ExplorerTreeViewProvider
       folders.sort((a, b) => a.uri.fsPath.localeCompare(b.uri.fsPath));
       files.sort((a, b) => a.uri.fsPath.localeCompare(b.uri.fsPath));
 
-      return [...folders, ...files];
+      const children = [...folders, ...files];
+      this._childCache.set(cacheKey, children);
+      return children;
     } catch {
       return [];
     }
