@@ -30,6 +30,30 @@ export function makeWorkspace() {
 /** 注入 zeta 配置（key 为去掉 zeta. 前缀的配置名） */
 export function setConfig(cfg) {
   globalThis.__zetaCfg = cfg;
+  const vscode = require(shimPath);
+  if (vscode?.workspace) {
+    vscode.workspace.getConfiguration = () => ({
+      get: (key, fallback) =>
+        globalThis.__zetaCfg && key in globalThis.__zetaCfg ? globalThis.__zetaCfg[key] : fallback,
+      update: async (key, value) => {
+        if (!globalThis.__zetaCfg) globalThis.__zetaCfg = {};
+        globalThis.__zetaCfg[key] = value;
+      },
+    });
+    if (!vscode.workspace.onDidChangeConfiguration) {
+      vscode.workspace.onDidChangeConfiguration = () => ({ dispose() {} });
+    }
+    if (!vscode.workspace.onDidCloseTextDocument) {
+      vscode.workspace.onDidCloseTextDocument = () => ({ dispose() {} });
+    }
+    if (!vscode.workspace.onDidSaveTextDocument) {
+      vscode.workspace.onDidSaveTextDocument = () => ({ dispose() {} });
+    }
+  }
+  if (vscode?.window) {
+    if (!vscode.window.onDidOpenTerminal) vscode.window.onDidOpenTerminal = () => ({ dispose() {} });
+    if (!vscode.window.onDidCloseTerminal) vscode.window.onDidCloseTerminal = () => ({ dispose() {} });
+  }
   return cfg;
 }
 
@@ -81,7 +105,9 @@ export function makeChecker() {
     summary() {
       if (failures.length > 0) {
         for (const f of failures) {
-          console.error(`✗ ${f.name}\n    expected: ${JSON.stringify(f.expected)}\n    actual:   ${JSON.stringify(f.actual)}`);
+          console.error(
+            `✗ ${f.name}\n    expected: ${JSON.stringify(f.expected)}\n    actual:   ${JSON.stringify(f.actual)}`
+          );
         }
       }
       return `${pass} passed, ${fail} failed`;
@@ -117,15 +143,17 @@ export function makeDocument(text, filePath, languageId, version = 1) {
     },
     lineAt: pos => {
       const line = typeof pos === 'number' ? pos : pos.line;
-      const isLast = line === lines.length - 1;
+      const safeLine = Math.min(Math.max(0, line), Math.max(0, lines.length - 1));
+      const lineText = lines[safeLine] ?? '';
+      const isLast = safeLine === lines.length - 1;
       return {
-        text: lines[line],
-        range: new Range(line, 0, line, lines[line].length),
-        rangeIncludingLineBreak: new Range(line, 0, isLast ? line : line + 1, isLast ? lines[line].length : 0),
+        text: lineText,
+        range: new Range(safeLine, 0, safeLine, lineText.length),
+        rangeIncludingLineBreak: new Range(safeLine, 0, isLast ? safeLine : safeLine + 1, isLast ? lineText.length : 0),
       };
     },
-    getWordRangeAtPosition: (pos, regex) => {
-      const line = lines[pos.line];
+    getWordRangeAtPosition: (pos, regex = /[\w$]+/) => {
+      const line = lines[pos.line] ?? '';
       const pattern = new RegExp(regex.source, 'g');
       let m;
       while ((m = pattern.exec(line)) !== null) {
@@ -155,4 +183,64 @@ export function countFs(method) {
       vscode.workspace.fs[method] = original;
     },
   };
+}
+
+function mockInsertSnippet(editor, snippet, location) {
+  const doc = editor.document;
+  const rawRanges = location ? (Array.isArray(location) ? location : [location]) : editor.selections;
+
+  const ranges = rawRanges.map(loc => {
+    if (loc instanceof vscode.Position) return new vscode.Range(loc, loc);
+    return loc;
+  });
+
+  const template = snippet.value;
+  const ops = [];
+  const newSelections = [];
+
+  for (const range of ranges) {
+    const selectedText = doc.getText(range);
+    let expanded = template.replace(/\$TM_SELECTED_TEXT/g, selectedText);
+
+    let placeholderMatch = expanded.match(/\${1:([^}]+)}/);
+    let placeholderText = placeholderMatch ? placeholderMatch[1] : '';
+    let processedText = expanded.replace(/\${\d+:([^}]+)}/g, '$1').replace(/\$\d+/g, '');
+
+    ops.push({
+      range,
+      text: processedText,
+    });
+  }
+
+  globalThis.__lastApply = ops;
+  return Promise.resolve(true);
+}
+
+// 在 test/helpers.mjs 末尾替换 editorWith 实现
+export function editorWith(doc, selections, options = { insertSpaces: true, tabSize: 2 }) {
+  const editor = {
+    document: doc,
+    selections: Array.isArray(selections) ? selections : [selections],
+    options,
+    revealRange: async () => {},
+    insertSnippet: async (snippet, location) => {
+      const rawRanges = location ? (Array.isArray(location) ? location : [location]) : editor.selections;
+
+      const ranges = rawRanges.map(loc => {
+        if (loc && loc.start && loc.end) return loc;
+        return new vscode.Range(loc, loc);
+      });
+
+      const snippetStr = snippet.value ?? String(snippet);
+      const ops = ranges.map(range => ({
+        range,
+        text: snippetStr,
+        snippet: snippetStr,
+      }));
+
+      globalThis.__lastApply = ops;
+      return true;
+    },
+  };
+  return editor;
 }

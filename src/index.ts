@@ -7,7 +7,10 @@ import { clearStyleDocCache, clearStyleFileCache, registerStyleCompletion } from
 import { registerStyleHover } from '@/providers/style-hover';
 import { TerminalToggleStatusItem } from '@/statusbar/terminal-toggle';
 import * as vscode from 'vscode';
+import { registerStyleDefinition } from './providers/style-definition';
+import { registerStyleSemanticTokens } from './providers/style-semantic-tokens';
 
+/** 扩展激活入口：装配资源导航、路径/样式补全、颜色/悬浮提供者、终端开关与全部命令 */
 export function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'zeta.htmlId', ['html', 'htm']);
 
@@ -24,6 +27,8 @@ export function activate(context: vscode.ExtensionContext) {
     registerStyleCompletion(),
     registerStyleColor(),
     registerStyleHover(),
+    registerStyleDefinition(),
+    registerStyleSemanticTokens(),
     // 文档关闭即释放文档级缓存（样式解析 / 颜色结果），避免长期运行内存累积
     vscode.workspace.onDidCloseTextDocument(doc => {
       clearStyleDocCache(doc.uri);

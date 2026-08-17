@@ -10,17 +10,20 @@ export class TerminalToggleStatusItem implements vscode.Disposable {
   private _listeners: vscode.Disposable[] = [];
 
   constructor() {
-    this._item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    const alignment = vscode.StatusBarAlignment?.Left ?? 1;
+    this._item = vscode.window.createStatusBarItem(alignment, 100);
     this._item.name = 'Zeta 终端切换';
     this._item.command = 'zeta.terminal.toggle';
 
-    this._listeners.push(
-      vscode.window.onDidOpenTerminal(() => this.update()),
-      vscode.window.onDidCloseTerminal(() => this.update()),
-      vscode.workspace.onDidChangeConfiguration(({ affectsConfiguration }) => {
+    const listeners = [
+      vscode.window.onDidOpenTerminal?.(() => this.update()),
+      vscode.window.onDidCloseTerminal?.(() => this.update()),
+      vscode.workspace.onDidChangeConfiguration?.(({ affectsConfiguration }) => {
         if (affectsConfiguration('zeta.show.terminal')) this.update();
-      })
-    );
+      }),
+    ].filter((l): l is vscode.Disposable => !!l && typeof l.dispose === 'function');
+
+    this._listeners.push(...listeners);
 
     this.update();
   }

@@ -1,6 +1,7 @@
 import { dirname, isFile } from '@/core/fs';
 import * as vscode from 'vscode';
 
+/** runInTerminal 的参数：目录/命令/名称/展示与「同名即重启」开关 */
 export interface RunInTerminalOptions {
   /** 终端的工作目录；若指向文件则自动取其所在目录 */
   cwd?: vscode.Uri;
@@ -14,6 +15,7 @@ export interface RunInTerminalOptions {
   disposeSame?: boolean;
 }
 
+/** 在指定目录创建终端并依次发送命令；cwd 指向文件时自动取其所在目录 */
 export async function runInTerminal({
   cwd,
   commands = [],
@@ -27,7 +29,10 @@ export async function runInTerminal({
   }
 
   if (disposeSame && name) {
-    vscode.window.terminals.find(terminal => terminal.name === name)?.dispose();
+    // 同名终端可能有多个（用户多次触发或重命名后残留），全部销毁
+    for (const terminal of vscode.window.terminals) {
+      if (terminal.name === name) terminal.dispose();
+    }
   }
 
   const terminal = vscode.window.createTerminal({ cwd: workingDir, name });

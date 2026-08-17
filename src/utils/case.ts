@@ -1,3 +1,4 @@
+/** 内置命名格式名：QuickPick 列表与 zeta.case.cycleOrder 配置使用同一组名称 */
 export type BuiltinCaseName =
   | 'Upper Case'
   | 'Lower Case'
@@ -12,6 +13,11 @@ export type BuiltinCaseName =
   | 'Dot Case'
   | 'Path Case';
 
+/**
+ * 把驼峰/帕斯卡/连字符/下划线/路径等写法拆成单词数组：
+ * 先按「小写或数字后接大写」「连续大写后接大写小写」切分驼峰边界，
+ * 再按 - _ . / \\ 与空白分隔符拆分。
+ */
 export function splitWords(s: string): string[] {
   return s
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -20,6 +26,7 @@ export function splitWords(s: string): string[] {
     .filter(Boolean);
 }
 
+/** 内置 12 种命名格式转换器：以 splitWords 拆词后按各自规则拼接 */
 export const wordTransformers: Record<BuiltinCaseName, (text: string) => string> = {
   'Camel Case': s =>
     splitWords(s)

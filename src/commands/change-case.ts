@@ -1,6 +1,7 @@
-import { Configuration } from '@/core/configuration';
+﻿import { Configuration } from '@/core/configuration';
 import Editor from '@/core/editor';
 import { wordTransformers } from '@/utils/case';
+import { buildFinalText, positionAt, remapOffset, TextEdit } from '@/utils/edits';
 import * as vscode from 'vscode';
 
 interface TransformStep {
@@ -9,11 +10,6 @@ interface TransformStep {
   flags?: string;
 }
 
-/**
- * 从 zeta.case.custom 配置构建自定义转换器；
- * 结构非法或正则编译失败的条目跳过并告警，不影响其余格式。
- * 导出供 cycleCase 复用同一套自定义格式。
- */
 export function buildCustomTransformers(): Record<string, (text: string) => string> {
   const transformers: Record<string, (text: string) => string> = {};
 
@@ -40,10 +36,12 @@ export function buildCustomTransformers(): Record<string, (text: string) => stri
   return transformers;
 }
 
-// 取主选区（或光标所在单词）的文本，作为 QuickPick 预览的样本
 function getSampleText(textEditor: vscode.TextEditor): string {
   const { selections, document } = textEditor;
-  const selection = selections[0];
+  const hasNonEmpty = selections.some(s => !s.isEmpty);
+  const activeSelections = hasNonEmpty ? selections.filter(s => !s.isEmpty) : selections;
+  if (activeSelections.length > 1) return '';
+  const selection = activeSelections[0];
   if (!selection) return '';
 
   const range = selection.isEmpty ? document.getWordRangeAtPosition(selection.active) : selection;
@@ -54,7 +52,15 @@ interface CaseQuickPickItem extends vscode.QuickPickItem {
   name: string;
 }
 
-/** 把转换器应用到全部选区（空选区取光标所在单词，多光标去重） */
+interface SelectionRecord {
+  start: number;
+  end: number;
+  isEmpty: boolean;
+  relativeOffset?: number;
+  wordRangeStart?: number;
+  wordRangeEnd?: number;
+}
+
 export async function applyTransformerToSelections(
   textEditor: vscode.TextEditor,
   transformer: (text: string) => string,
@@ -62,33 +68,110 @@ export async function applyTransformerToSelections(
 ): Promise<void> {
   const { selections, document } = textEditor;
   const editorEdit = new Editor(document.uri);
+  const originalText = document.getText();
   const processedKeys = new Set<string>();
-  const updatedSelections: vscode.Selection[] = [];
+  const edits: TextEdit[] = [];
+  const records: SelectionRecord[] = [];
   let hasChanges = false;
+
+  const hasNonEmpty = selections.some(s => !s.isEmpty);
+
   for (const selection of selections) {
+    if (hasNonEmpty && selection.isEmpty) {
+      const offset = document.offsetAt(selection.active);
+      records.push({ start: offset, end: offset, isEmpty: true });
+      continue;
+    }
+
     const range = selection.isEmpty ? document.getWordRangeAtPosition(selection.active) : selection;
-    if (!range) continue;
+    if (!range) {
+      if (selection.isEmpty) {
+        const offset = document.offsetAt(selection.active);
+        records.push({ start: offset, end: offset, isEmpty: true });
+      }
+      continue;
+    }
+
+    const start = document.offsetAt(range.start);
+    const end = document.offsetAt(range.end);
     const uniqueKey = `${range.start.line}-${range.start.character}-${range.end.line}-${range.end.character}`;
-    if (processedKeys.has(uniqueKey)) continue;
+
+    if (processedKeys.has(uniqueKey)) {
+      if (selection.isEmpty) {
+        const activeOffset = document.offsetAt(selection.active);
+        records.push({
+          start: activeOffset,
+          end: activeOffset,
+          isEmpty: true,
+          relativeOffset: activeOffset - start,
+          wordRangeStart: start,
+          wordRangeEnd: end,
+        });
+      }
+      continue;
+    }
     processedKeys.add(uniqueKey);
-    const originalText = document.getText(range);
-    const transformedText = transformer(originalText);
-    if (originalText !== transformedText) {
-      editorEdit.replace(range, transformedText);
+
+    const originalTextInRange = document.getText(range);
+    const transformedText = transformer(originalTextInRange);
+
+    if (originalTextInRange !== transformedText) {
+      edits.push({ start, end, text: transformedText });
       hasChanges = true;
     }
-    const endPosition =
-      range.start.line === range.end.line ? range.start.translate(0, transformedText.length) : range.end;
-    updatedSelections.push(new vscode.Selection(range.start, endPosition));
-  }
-  if (hasChanges) {
-    const applied = await editorEdit.apply();
-    if (applied && selectTransformed && updatedSelections.length > 0) {
-      textEditor.selections = updatedSelections;
+
+    if (selection.isEmpty) {
+      const activeOffset = document.offsetAt(selection.active);
+      records.push({
+        start: activeOffset,
+        end: activeOffset,
+        isEmpty: true,
+        relativeOffset: activeOffset - start,
+        wordRangeStart: start,
+        wordRangeEnd: end,
+      });
+    } else {
+      records.push({ start, end, isEmpty: false });
     }
-  } else if (selectTransformed && updatedSelections.length > 0) {
-    textEditor.selections = updatedSelections;
   }
+
+  if (hasChanges) {
+    for (const edit of edits) {
+      editorEdit.replace(new vscode.Range(document.positionAt(edit.start), document.positionAt(edit.end)), edit.text);
+    }
+    const applied = await editorEdit.apply();
+    if (applied && selectTransformed) {
+      textEditor.selections = remapSelections(document, originalText, edits, records);
+    }
+  } else if (selectTransformed && records.length > 0) {
+    textEditor.selections = remapSelections(document, originalText, edits, records);
+  }
+}
+
+function remapSelections(
+  document: vscode.TextDocument,
+  originalText: string,
+  edits: TextEdit[],
+  records: SelectionRecord[]
+): vscode.Selection[] {
+  const finalText = buildFinalText(originalText, edits);
+  return records.map(record => {
+    if (record.isEmpty) {
+      if (record.relativeOffset !== undefined && record.wordRangeStart !== undefined) {
+        const matchedEdit = edits.find(e => e.start === record.wordRangeStart);
+        const mappedWordStart = remapOffset(record.wordRangeStart, edits);
+        const newWordLength = matchedEdit ? matchedEdit.text.length : record.wordRangeEnd! - record.wordRangeStart;
+        const newOffset = mappedWordStart + Math.min(record.relativeOffset, newWordLength);
+        const pos = positionAt(finalText, newOffset);
+        return new vscode.Selection(pos, pos);
+      }
+      const endPos = positionAt(finalText, remapOffset(record.end, edits));
+      return new vscode.Selection(endPos, endPos);
+    }
+    const startPos = positionAt(finalText, remapOffset(record.start, edits));
+    const endPos = positionAt(finalText, remapOffset(record.end, edits));
+    return new vscode.Selection(startPos, endPos);
+  });
 }
 
 export default async function changeCase(
@@ -99,14 +182,17 @@ export default async function changeCase(
   const sampleText = getSampleText(textEditor);
   const transformers: Record<string, (text: string) => string> = { ...wordTransformers, ...buildCustomTransformers() };
 
-  // 主标题展示转换结果，副标题展示格式名；按格式名回查转换器
   const transformerKey =
     caseFromConfig ??
     (await vscode.window
       .showQuickPick<CaseQuickPickItem>(
         Object.entries(transformers).map(([name, transform]) => {
-          const preview = transform(sampleText);
-          return { label: preview.length > 0 ? preview : name, detail: name, name };
+          const preview = sampleText ? transform(sampleText) : '';
+          return {
+            label: preview.length > 0 ? preview : name,
+            detail: preview.length > 0 ? name : undefined,
+            name,
+          };
         }),
         { placeHolder: sampleText ? `转换预览（基于「${sampleText}」）` : '选择单词转换格式' }
       )

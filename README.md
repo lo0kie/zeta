@@ -61,4 +61,4 @@ pnpm package   # 打包 vsix
 
 ## License
 
-MIT
+[MIT](./LiCENSE)

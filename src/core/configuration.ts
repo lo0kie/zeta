@@ -28,6 +28,7 @@ const configDefinitions = {
   terminal: { key: 'zeta.show.terminal', default: true },
 } satisfies { [K in keyof ConfigTypeMap]: { key: string; default: ConfigTypeMap[K] } };
 
+/** 配置访问门面：get/set 的类型安全封装 + 快捷静态访问器，键名与默认值定义与 package.json 声明保持一致 */
 export class Configuration {
   public static get<K extends keyof ConfigTypeMap>(key: K): ConfigTypeMap[K] {
     const { key: configKey, default: fallback } = configDefinitions[key];
@@ -45,12 +46,11 @@ export class Configuration {
     return (typeof value === typeof fallback ? value : fallback) as ConfigTypeMap[K];
   }
 
+  /** 写入配置：存在工作区时写 Workspace 作用域，否则写 Global，避免多窗口互相覆盖 */
   public static async set<K extends keyof ConfigTypeMap>(key: K, value: ConfigTypeMap[K]): Promise<void> {
-    // 工作区内写入 Workspace 配置（按项目隔离，如 zeta.list.folders 不应跨窗口共享）；
-    // 无工作区时回落到 Global，避免 update 因缺少 Workspace target 抛错
     const target = vscode.workspace.workspaceFolders?.length
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
+      ? (vscode.ConfigurationTarget?.Workspace ?? 2)
+      : (vscode.ConfigurationTarget?.Global ?? 1);
     await vscode.workspace.getConfiguration().update(configDefinitions[key].key, value, target);
   }
 

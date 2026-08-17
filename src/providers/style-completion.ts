@@ -1,23 +1,29 @@
-import { basename, dirname, isFile } from '@/core/fs';
+﻿import { basename, dirname, isFile } from '@/core/fs';
 import { resolveAliasCandidates } from '@/core/path-alias';
 import { TtlCache } from '@/core/ttl-cache';
 import * as vscode from 'vscode';
 
-interface StyleSymbol {
+const COLOR_VALUE_PATTERN = /(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\))/i;
+
+function createColorSwatchUri(color: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="11" height="11"><rect width="12" height="12" rx="2" fill="${color}" stroke="#88888880" stroke-width="1.5"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+export interface StyleSymbol {
   name: string;
   value: string;
   kind: 'variable' | 'mixin' | 'css-variable' | 'scss-variable' | 'scss-mixin';
   filePath: string;
+  scope?: string;
   snippet?: string;
 }
 
-const STYLE_EXTENSIONS = ['less', 'css', 'scss', 'sass', 'vue'];
+const STYLE_EXTENSIONS = ['less', 'css', 'scss', 'sass', 'stylus', 'postcss', 'vue'];
 const STYLE_CACHE_TTL_MS = 10000;
 
 const styleCache = new TtlCache<StyleSymbol[]>(STYLE_CACHE_TTL_MS);
 
-// 文档级解析缓存：按 document.version 失效。同一版本内补全/悬浮/颜色的多次触发
-// 只做一次「@import 扫描 + 当前文档符号解析」，导入文件的符号仍走各自的 TTL 缓存。
 const DOC_CACHE_TTL_MS = 10000;
 const docParseCache = new TtlCache<{ version: number; importedUris?: vscode.Uri[]; symbols?: StyleSymbol[] }>(
   DOC_CACHE_TTL_MS
@@ -27,18 +33,10 @@ function getDocCacheKey(uri: vscode.Uri): string {
   return uri.toString();
 }
 
-/** 文档关闭时释放文档级解析缓存 */
 export function clearStyleDocCache(uri: vscode.Uri): void {
   docParseCache.delete(getDocCacheKey(uri));
 }
 
-/**
- * 导入文件保存后释放其原文与符号缓存。
- * docParseCache 的 key 是「引用方文档」（main.vue 等），不是被保存的文件自身——
- * 只删自身 key 不会命中任何条目，且引用方 version 未变时 collectImportedSymbols
- * 会提前命中旧 symbols 返回。因此这里全量清空文档级缓存（10s 短缓存，
- * 下次访问自然重建），让所有引用该文件的文档在下一次补全/悬浮时重新收集。
- */
 export function clearStyleFileCache(uri: vscode.Uri): void {
   const key = uri.toString();
   fileTextCache.delete(key);
@@ -46,15 +44,46 @@ export function clearStyleFileCache(uri: vscode.Uri): void {
   docParseCache.clear();
 }
 
-// 在这些语言的（style）内容中启用补全；css-variable 对所有预处理语言有效，
-// Less 变量与 mixin 只在 less 内容里提供
 const CSS_LIKE_LANGS = new Set(['less', 'css', 'scss', 'sass', 'stylus', 'postcss']);
 
-// 导入文件原文缓存：递归收集、符号解析与 hover 选择器扫描共用，同一文件 10s 内不重读
+const AT_RULE_KEYWORDS = new Set([
+  'media',
+  'keyframes',
+  'import',
+  'use',
+  'forward',
+  'include',
+  'mixin',
+  'function',
+  'if',
+  'else',
+  'each',
+  'for',
+  'while',
+  'return',
+  'extend',
+  'charset',
+  'font-face',
+  'supports',
+  'layer',
+  'container',
+  'property',
+  'page',
+  'namespace',
+  'document',
+  'viewport',
+  'counter-style',
+  'scope',
+  'starting-style',
+]);
+
 const FILE_TEXT_CACHE_TTL_MS = 10000;
 const fileTextCache = new TtlCache<string>(FILE_TEXT_CACHE_TTL_MS);
 
 export async function readFileTextCached(uri: vscode.Uri): Promise<string> {
+  const openDoc = vscode.workspace.textDocuments?.find(doc => doc.uri.toString() === uri.toString());
+  if (openDoc) return openDoc.getText();
+
   const key = uri.toString();
   const cached = fileTextCache.get(key);
   if (cached !== undefined) return cached;
@@ -64,10 +93,6 @@ export async function readFileTextCached(uri: vscode.Uri): Promise<string> {
   return text;
 }
 
-/**
- * 解析样式导入路径为真实文件 uri。按候选顺序（相对/根绝对/别名多 target）
- * 依次探测存在性，最后按 .less/.css/.scss 依次补齐扩展名。
- */
 export async function resolveImportUri(documentUri: vscode.Uri, importPath: string): Promise<vscode.Uri | undefined> {
   const candidates: vscode.Uri[] = [];
 
@@ -78,26 +103,36 @@ export async function resolveImportUri(documentUri: vscode.Uri, importPath: stri
     if (!workspaceFolder) return undefined;
     candidates.push(vscode.Uri.joinPath(workspaceFolder.uri, importPath.replace(/^[~/]+/, '')));
   } else if (importPath.startsWith('@')) {
-    // 别名导入：完整导入路径作为子路径来源（保留文件名），多候选 target 依次探测；
-    // 未命中别名时回落 <workspaceRoot>/src 约定
     const aliasCandidates = await resolveAliasCandidates(documentUri, importPath, importPath);
     if (aliasCandidates) candidates.push(...aliasCandidates);
     if (importPath.startsWith('@/')) {
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
       if (workspaceFolder) candidates.push(vscode.Uri.joinPath(workspaceFolder.uri, 'src', importPath.slice(2)));
     }
+  } else if (!importPath.includes(':')) {
+    candidates.push(vscode.Uri.joinPath(dirname(documentUri), importPath));
   }
 
   for (const candidate of candidates) {
     if (await isFile(candidate)) return candidate;
 
-    // 扩展名探测并行化：同前缀文件（theme.less/css/scss）与目录索引（theme/index.less 等）
-    // 一次并发检查，避免逐条串行轮询；顺序即优先级（前缀优先于索引）。
-    // 额外探测 SCSS partial 约定（_theme.scss）：@use "./theme" 解析到 _theme.scss
     const base = basename(candidate);
     const extUris = [
-      ...['.less', '.css', '.scss', '.sass'].map(ext => vscode.Uri.joinPath(dirname(candidate), base + ext)),
-      ...['index.less', 'index.css', 'index.scss', 'index.sass'].map(indexFile => vscode.Uri.joinPath(candidate, indexFile)),
+      ...['.less', '.css', '.scss', '.sass', '.styl', '.stylus', '.pcss', '.postcss'].map(ext =>
+        vscode.Uri.joinPath(dirname(candidate), base + ext)
+      ),
+      ...[
+        'index.less',
+        'index.css',
+        'index.scss',
+        'index.sass',
+        '_index.scss',
+        '_index.sass',
+        'index.styl',
+        'index.stylus',
+        'index.pcss',
+        'index.postcss',
+      ].map(indexFile => vscode.Uri.joinPath(candidate, indexFile)),
       ...['.scss', '.sass'].map(ext => vscode.Uri.joinPath(dirname(candidate), `_${base}${ext}`)),
     ];
     const results = await Promise.all(extUris.map(async uri => ({ uri, exists: await isFile(uri) })));
@@ -107,34 +142,84 @@ export async function resolveImportUri(documentUri: vscode.Uri, importPath: stri
   return undefined;
 }
 
-/**
- * 按顶层分隔符切分参数列表：嵌套括号（rgba(...)、darken(...)）与引号字符串
- * （.btn(@label: "hello, world")、.list(@sep: ",")）内的分隔符不算。
- * Less 规范：参数含列表或多参数时推荐用分号 ; 分隔（.box(@w: 1px; @c: #000)），
- * 存在分号时优先按分号切分，否则按逗号。
- */
-function splitTopLevelParams(rawParams: string): string[] {
-  const separator = rawParams.includes(';') ? ';' : ',';
-  const parts: string[] = [];
+/** 扫描顶层（非字符串/非括号内）出现的第一个分隔符：优先逗号，其次分号；都没有时回落逗号 */
+function findTopLevelSeparator(rawParams: string): string {
   let depth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
   let inString: string | null = null;
-  let current = '';
 
   for (let i = 0; i < rawParams.length; i++) {
     const char = rawParams[i];
-    const prev = rawParams[i - 1];
 
-    if ((char === '"' || char === "'") && prev !== '\\') {
-      if (!inString) inString = char;
-      else if (inString === char) inString = null;
+    if (char === '"' || char === "'") {
+      let backslashCount = 0;
+      let j = i - 1;
+      while (j >= 0 && rawParams[j] === '\\') {
+        backslashCount++;
+        j--;
+      }
+      if (backslashCount % 2 === 0) {
+        if (!inString) inString = char;
+        else if (inString === char) inString = null;
+      }
     }
 
     if (!inString) {
       if (char === '(') depth++;
       else if (char === ')' && depth > 0) depth--;
+      else if (char === '{') braceDepth++;
+      else if (char === '}' && braceDepth > 0) braceDepth--;
+      else if (char === '[') bracketDepth++;
+      else if (char === ']' && bracketDepth > 0) bracketDepth--;
+      else if (char === ',' && depth === 0 && braceDepth === 0 && bracketDepth === 0) return ',';
+      else if (char === ';' && depth === 0 && braceDepth === 0 && bracketDepth === 0) return ';';
+    }
+  }
+  return ',';
+}
+
+function splitTopLevelParams(rawParams: string): string[] {
+  // 分隔符只看顶层出现：字符串/括号内的 ; 不参与判定（如 @a: "x;y", @b: 2 仍是逗号分隔）
+  const separator = findTopLevelSeparator(rawParams);
+  const parts: string[] = [];
+  let depth = 0;
+  let braceDepth = 0; // 新增
+  let bracketDepth = 0; // 新增
+  let inString: string | null = null;
+  let current = '';
+
+  for (let i = 0; i < rawParams.length; i++) {
+    const char = rawParams[i];
+
+    if (char === '"' || char === "'") {
+      let backslashCount = 0;
+      let j = i - 1;
+      while (j >= 0 && rawParams[j] === '\\') {
+        backslashCount++;
+        j--;
+      }
+      const isEscaped = backslashCount % 2 !== 0;
+
+      if (!isEscaped) {
+        if (!inString) inString = char;
+        else if (inString === char) inString = null;
+      }
     }
 
-    if (char === separator && depth === 0 && !inString) {
+    if (!inString) {
+      if (char === '(') depth++;
+      else if (char === ')' && depth > 0) depth--;
+      else if (char === '{')
+        braceDepth++; // 新增
+      else if (char === '}' && braceDepth > 0)
+        braceDepth--; // 新增
+      else if (char === '[')
+        bracketDepth++; // 新增
+      else if (char === ']' && bracketDepth > 0) bracketDepth--; // 新增
+    }
+
+    if (char === separator && depth === 0 && braceDepth === 0 && bracketDepth === 0 && !inString) {
       parts.push(current);
       current = '';
     } else {
@@ -145,27 +230,120 @@ function splitTopLevelParams(rawParams: string): string[] {
   return parts;
 }
 
-/**
- * 安全剥离样式注释：先匹配引号字面量（保留），再删块注释与单行注释。
- * 避免把 URL（url('//font.com')、'https://...'）里的 // 当单行注释抹除，导致分号丢失、变量遗漏。
- * hover 的选择器扫描也复用此函数，避免注释内的选择器被伪匹配。
- */
 export function stripCommentsSafe(content: string): string {
-  return content.replace(/(['"`])(?:\\.|[^\\])*?\1|\/\*[\s\S]*?\*\/|\/\/.*/g, (match, quote) =>
+  // 把 [^\\] 替换成了 [^\\\r\n] 并且结束条件增加了 \r?\n
+  return content.replace(/(['"`])(?:\\.|[^\\\r\n])*?(?:\1|\r?\n|$)|\/\*[\s\S]*?(?:\*\/|$)|\/\/.*/g, (match, quote) =>
     quote ? match : ''
   );
+}
+
+function parseNestedCssVariables(cleanContent: string, filePath: string): StyleSymbol[] {
+  const symbols: StyleSymbol[] = [];
+  let i = 0;
+  const scopeStack: string[] = [];
+  let currentSelector = '';
+  let inString: string | null = null;
+
+  while (i < cleanContent.length) {
+    const char = cleanContent[i];
+
+    if (inString) {
+      if (char === '\\') i++;
+      else if (char === inString) inString = null;
+      i++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      inString = char;
+      i++;
+      continue;
+    }
+
+    if (char === '{') {
+      const selector = currentSelector.trim().replace(/\s+/g, ' ');
+      if (selector) {
+        const parentScope = scopeStack[scopeStack.length - 1];
+        let fullScope = selector;
+        if (parentScope) {
+          fullScope = selector.includes('&') ? selector.replace(/&/g, parentScope) : `${parentScope} ${selector}`;
+        }
+        scopeStack.push(fullScope);
+      } else {
+        scopeStack.push(scopeStack[scopeStack.length - 1] || '');
+      }
+      currentSelector = '';
+      i++;
+      continue;
+    }
+
+    if (char === '}') {
+      if (scopeStack.length > 0) scopeStack.pop();
+      currentSelector = '';
+      i++;
+      continue;
+    }
+
+    if (char === ';') {
+      currentSelector = '';
+      i++;
+      continue;
+    }
+
+    // O(1) 试探：遇到 -- 才开始扫描变量
+    if (char === '-' && cleanContent[i + 1] === '-') {
+      let j = i + 2;
+      while (j < cleanContent.length && /[a-zA-Z0-9_-]/.test(cleanContent[j])) j++;
+      const varName = cleanContent.slice(i, j);
+
+      while (j < cleanContent.length && /\s/.test(cleanContent[j])) j++;
+      if (cleanContent[j] === ':') {
+        j++;
+        const valStart = j;
+        let valString: string | null = null;
+        // 安全扫描变量值直到遇到 ; 或 }，保护内部的字符串
+        while (j < cleanContent.length) {
+          const vc = cleanContent[j];
+          if (valString) {
+            if (vc === '\\') j++;
+            else if (vc === valString) valString = null;
+          } else {
+            if (vc === '"' || vc === "'") valString = vc;
+            else if (vc === ';' || vc === '}') break;
+          }
+          j++;
+        }
+        const value = cleanContent.slice(valStart, j).trim();
+        if (value) {
+          symbols.push({
+            name: varName,
+            value,
+            kind: 'css-variable',
+            filePath,
+            scope: scopeStack[scopeStack.length - 1] || undefined,
+          });
+        }
+        i = j;
+        if (cleanContent[i] === ';') i++;
+        currentSelector = '';
+        continue;
+      }
+    }
+
+    currentSelector += char;
+    i++;
+  }
+
+  return symbols;
 }
 
 function parseStyleContent(content: string, filePath: string, lang?: string): StyleSymbol[] {
   const symbols: StyleSymbol[] = [];
   const cleanContent = stripCommentsSafe(content);
 
-  // 块自身 lang 优先（vue 的 <style lang="scss"> 不再误当 less）；否则按扩展名推断
   const isLess = lang ? lang === 'less' : filePath.endsWith('.less') || filePath.endsWith('.vue');
   const isScss = lang ? lang === 'scss' || lang === 'sass' : filePath.endsWith('.scss') || filePath.endsWith('.sass');
 
   if (isLess) {
-    // Less 变量: @primary-color: #1890ff;
     const lessVarRegex = /@([a-zA-Z0-9_-]+)\s*:\s*([^;{}]+);/g;
     let match: RegExpExecArray | null;
     while ((match = lessVarRegex.exec(cleanContent)) !== null) {
@@ -177,20 +355,13 @@ function parseStyleContent(content: string, filePath: string, lang?: string): St
       });
     }
 
-    // Less Mixin：只识别带参数列表的 .name(...) { 定义，
-    // 普通类选择器（.name {）不算 mixin，避免把样式类误报成可调用结构。
-    // 参数用非贪婪跨行匹配：默认值含嵌套括号（rgba(...)、darken(...)）或多行参数时
-    // 不会被第一个内层 ) 截断，直到遇见真正的闭合 ) 后跟 { 才停止。
     const mixinRegex = /\.([a-zA-Z0-9_-]+)\s*\(([\s\S]*?)\)\s*\{/g;
     while ((match = mixinRegex.exec(cleanContent)) !== null) {
       const name = `.${match[1]}`;
       const rawParams = match[2]?.trim() ?? '';
-      // 按顶层逗号切分，嵌套括号（rgba(0,0,0,0.5) 等）内的逗号不拆散
       const paramsList = splitTopLevelParams(rawParams)
         .map((p, idx) => `\${${idx + 1}:${p.trim()}}`)
         .join(', ');
-      // replaceRange 覆盖用户输入的含点号前缀（.bord），snippet 必须保留点号，
-      // 否则插入结果变成无点号的函数调用（bordered(...)）而非 Less mixin 调用（.bordered(...)）
       const snippet = rawParams ? `${name}(${paramsList});` : `${name}();`;
       symbols.push({
         name,
@@ -203,7 +374,6 @@ function parseStyleContent(content: string, filePath: string, lang?: string): St
   }
 
   if (isScss) {
-    // SCSS 变量: $primary-color: #1890ff;
     const scssVarRegex = /\$([a-zA-Z0-9_-]+)\s*:\s*([^;{}]+);/g;
     let match: RegExpExecArray | null;
     while ((match = scssVarRegex.exec(cleanContent)) !== null) {
@@ -215,7 +385,6 @@ function parseStyleContent(content: string, filePath: string, lang?: string): St
       });
     }
 
-    // SCSS Mixin: @mixin name($a, $b) { ... }（参数可省略、可跨行、含嵌套括号默认值）
     const scssMixinRegex = /@mixin\s+([a-zA-Z0-9_-]+)\s*(?:\(([\s\S]*?)\))?\s*\{/g;
     while ((match = scssMixinRegex.exec(cleanContent)) !== null) {
       const name = `@${match[1]}`;
@@ -223,7 +392,6 @@ function parseStyleContent(content: string, filePath: string, lang?: string): St
       const paramsList = splitTopLevelParams(rawParams)
         .map((p, idx) => `\${${idx + 1}:${p.trim()}}`)
         .join(', ');
-      // 插入为 @include name(...);（replaceRange 覆盖用户输入的 @name 前缀，必须保留 @）
       const snippet = rawParams ? `@include ${match[1]}(${paramsList});` : `@include ${match[1]}();`;
       symbols.push({
         name,
@@ -235,22 +403,11 @@ function parseStyleContent(content: string, filePath: string, lang?: string): St
     }
   }
 
-  // CSS 原生变量: --main-bg: #fff;
-  const cssVarRegex = /--([a-zA-Z0-9_-]+)\s*:\s*([^;{}]+);/g;
-  let match: RegExpExecArray | null;
-  while ((match = cssVarRegex.exec(cleanContent)) !== null) {
-    symbols.push({
-      name: `--${match[1]}`,
-      value: match[2].trim(),
-      kind: 'css-variable',
-      filePath,
-    });
-  }
+  symbols.push(...parseNestedCssVariables(cleanContent, filePath));
 
   return symbols;
 }
 
-/** 提取 vue SFC 中的 <style> 块（含 lang 与偏移）；非 vue 文档整体视为一个块 */
 export function getStyleBlocks(
   document: vscode.TextDocument
 ): { content: string; start: number; end: number; lang: string }[] {
@@ -275,12 +432,6 @@ export function getStyleBlocks(
   return blocks;
 }
 
-/**
- * 收集文档（含 vue 的 <style src>）通过 @import 引用的样式文件，递归展开：
- * 聚合文件（index.less @import 多个子文件）的二级变量/Mixin 也能被找到。
- * 最多递归 3 层，visited 防循环引用；相对/别名路径相对各文件自身目录解析。
- * 结果按 document.version 缓存。
- */
 export async function collectImportedFiles(document: vscode.TextDocument): Promise<vscode.Uri[]> {
   const key = getDocCacheKey(document.uri);
   const cached = docParseCache.get(key);
@@ -296,7 +447,6 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
     queue.push({ uri: document.uri, content: text, depth: 0 });
   }
 
-  // vue 的 <style src="..."> 引用：作为文档直接依赖，同样参与后续递归
   if (document.languageId === 'vue') {
     const srcRegex = /<style\b[^>]*\bsrc=['"]([^'"]+)['"]/gi;
     let match: RegExpExecArray | null;
@@ -309,23 +459,20 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
       resultUris.push(targetUri);
       try {
         queue.push({ uri: targetUri, content: await readFileTextCached(targetUri), depth: 0 });
-      } catch {
-        // 忽略不可读文件
-      }
+      } catch {}
     }
   }
 
-  // 覆盖 Less/CSS 的 @import 与 SCSS/Sass 的 @use/@forward（含 (reference) 选项与 url(...)）
   const importRegex = /@(?:import|use|forward)\s+(?:\([^)]*\)\s+)?(?:url\()?['"]([^'"]+)['"]\)?/g;
 
   while (queue.length > 0) {
     const current = queue.shift()!;
     if (current.depth >= 3) continue;
 
-    // 每次针对新内容重置 lastIndex，避免跨文本残留导致 vue 多 style 块漏扫
+    const cleanContent = stripCommentsSafe(current.content);
     importRegex.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = importRegex.exec(current.content)) !== null) {
+    while ((match = importRegex.exec(cleanContent)) !== null) {
       const targetUri = await resolveImportUri(current.uri, match[1]);
       if (!targetUri) continue;
 
@@ -336,15 +483,11 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
 
       try {
         queue.push({ uri: targetUri, content: await readFileTextCached(targetUri), depth: current.depth + 1 });
-      } catch {
-        // 忽略不可读文件
-      }
+      } catch {}
     }
   }
 
   const prev = docParseCache.get(key);
-  // 只在本版本内继承另一字段的缓存；版本已变时对应字段置空，
-  // 避免把旧版本的 symbols 写进新版本条目造成跨版本污染
   const isSameVersion = prev?.version !== undefined && prev.version === document.version;
   docParseCache.set(key, {
     version: document.version,
@@ -362,11 +505,8 @@ export async function collectImportedSymbols(document: vscode.TextDocument): Pro
   const importedUris = await collectImportedFiles(document);
 
   const allSymbols: StyleSymbol[] = [];
-  const now = Date.now();
   const visited = new Set<string>();
 
-  // 当前文档自身（含 vue 的 style 块）直接解析：正在编辑，不走缓存。
-  // 传入块自身的 lang，避免 <style lang="scss"> 等块被误当 less 解析
   for (const block of getStyleBlocks(document)) {
     allSymbols.push(...parseStyleContent(block.content, document.uri.fsPath, block.lang));
   }
@@ -383,7 +523,6 @@ export async function collectImportedSymbols(document: vscode.TextDocument): Pro
     }
 
     try {
-      // 递归收集时已通过 readFileTextCached 加载过原文，这里直接命中缓存避免重复读盘
       const text = await readFileTextCached(uri);
       const parsed = parseStyleContent(text, uri.fsPath);
       styleCache.set(uriStr, parsed);
@@ -394,7 +533,6 @@ export async function collectImportedSymbols(document: vscode.TextDocument): Pro
   }
 
   const prev = docParseCache.get(key);
-  // 与 collectImportedFiles 对称：版本已变时不继承旧 importedUris，避免导入列表跨版本污染
   const isSameVersion = prev?.version !== undefined && prev.version === document.version;
   docParseCache.set(key, {
     version: document.version,
@@ -412,7 +550,6 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
   ): Promise<vscode.CompletionItem[] | undefined> {
     const offset = document.offsetAt(position);
 
-    // vue：只有光标落在 <style> 块内才提供补全（template/script 里的 @、. 不触发）
     let activeLang = document.languageId;
     if (document.languageId === 'vue') {
       const blocks = getStyleBlocks(document);
@@ -425,7 +562,6 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
     const lineText = document.lineAt(position).text;
     const textBeforeCursor = lineText.slice(0, position.character);
 
-    // @/ 开头的路径交给路径补全，样式补全让位
     if (/(?:['"`]|from\s+|import\s+|url\(\s*)@\/[^\s'"`()]*$/.test(textBeforeCursor)) {
       return undefined;
     }
@@ -453,7 +589,10 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
       if (isTriggerCssVar) return sym.kind === 'css-variable';
       if (isTriggerAt) {
         if (isLessLang && sym.kind === 'variable') return true;
-        if (isScssLang && sym.kind === 'scss-mixin') return true;
+        if (isScssLang && sym.kind === 'scss-mixin') {
+          const word = matchedPrefix.slice(1).toLowerCase();
+          return word.length > 0 && !AT_RULE_KEYWORDS.has(word);
+        }
         return false;
       }
       if (isTriggerDot) return isLessLang && sym.kind === 'mixin';
@@ -462,31 +601,60 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
     });
     if (filteredSymbols.length === 0) return undefined;
 
-    return filteredSymbols.map(sym => {
-      const isMixin = sym.kind === 'mixin' || sym.kind === 'scss-mixin';
-      const isLess = sym.kind === 'mixin' || sym.kind === 'variable';
-      const lang = isLess ? 'less' : isScssLang ? 'scss' : 'css';
-      const codePreview = isMixin ? `${sym.value} {\n  /* mixin */\n}` : `${sym.name}: ${sym.value};`;
+    const grouped = new Map<string, StyleSymbol[]>();
+    for (const sym of filteredSymbols) {
+      const list = grouped.get(sym.name);
+      if (list) list.push(sym);
+      else grouped.set(sym.name, [sym]);
+    }
+
+    return Array.from(grouped.entries()).map(([name, symbols]) => {
+      const first = symbols[0];
+      const isMixin = first.kind === 'mixin' || first.kind === 'scss-mixin';
+
+      const hasColor = symbols.some(s => COLOR_VALUE_PATTERN.test(s.value));
+      const itemKind = isMixin
+        ? vscode.CompletionItemKind.Function
+        : hasColor
+          ? vscode.CompletionItemKind.Color
+          : vscode.CompletionItemKind.Variable;
+
+      const fileNames = Array.from(new Set(symbols.map(s => basename(vscode.Uri.file(s.filePath)))));
       const item = new vscode.CompletionItem(
-        sym.name,
-        isMixin ? vscode.CompletionItemKind.Function : vscode.CompletionItemKind.Variable
+        {
+          label: name,
+          description: fileNames.join(', '),
+        },
+        itemKind
       );
 
       item.range = replaceRange;
-      item.detail = basename(vscode.Uri.file(sym.filePath));
-      item.documentation = new vscode.MarkdownString().appendCodeblock(codePreview, lang);
+      item.detail = name;
 
-      if (isMixin && sym.snippet) {
-        // 光标后已有分号（用户先输入 .btn; 再补全）时不重复追加
+      const doc = new vscode.MarkdownString();
+      doc.supportHtml = true;
+      doc.isTrusted = true;
+
+      const lines = symbols.map(s => {
+        const scope = s.scope ? `\`[${s.scope}]\` ` : '';
+        const colorMatch = !isMixin ? s.value.match(COLOR_VALUE_PATTERN) : null;
+        const valuePart = colorMatch ? `![](${createColorSwatchUri(colorMatch[0])}) \`${s.value}\`` : `\`${s.value}\``;
+        return `${scope}${valuePart}`;
+      });
+
+      doc.appendMarkdown(lines.join('  \n'));
+      item.documentation = doc;
+
+      if (isMixin && first.snippet) {
         const afterText = lineText.slice(position.character).trimStart();
         const snippetStr =
-          afterText.startsWith(';') && sym.snippet.endsWith(';') ? sym.snippet.slice(0, -1) : sym.snippet;
+          afterText.startsWith(';') && first.snippet.endsWith(';') ? first.snippet.slice(0, -1) : first.snippet;
         item.insertText = new vscode.SnippetString(snippetStr);
       } else {
-        item.insertText = sym.name;
+        item.insertText = name;
       }
 
-      item.sortText = isMixin ? `0_${sym.name}` : `1_${sym.name}`;
+      item.sortText = isMixin ? `\0_0_${name}` : `\0_1_${name}`;
       return item;
     });
   }
@@ -495,5 +663,5 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
 export function registerStyleCompletion(): vscode.Disposable {
   const provider = new StyleCompletionProvider();
   const selectors = STYLE_EXTENSIONS.map(language => ({ language, scheme: 'file' }));
-  return vscode.languages.registerCompletionItemProvider(selectors, provider, '@', '.', '$');
+  return vscode.languages.registerCompletionItemProvider(selectors, provider, '@', '.', '$', '-');
 }

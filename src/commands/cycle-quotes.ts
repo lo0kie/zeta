@@ -1,9 +1,10 @@
 import Editor from '@/core/editor';
 import {
-  QUOTE_ORDER,
   convertConcatToTemplate,
   findConcatenationChain,
+  getNextQuote,
   scanStringTokens,
+  transformAttrQuotes,
   transformQuotes,
 } from '@/utils/quote';
 import * as vscode from 'vscode';
@@ -15,10 +16,13 @@ export default async function cycleQuotes(textEditor: vscode.TextEditor): Promis
   if (tokens.length === 0) return;
 
   const editor = new Editor(document.uri);
-  const processedOffsets = new Set<number>();
+  const processedRanges: { start: number; end: number }[] = [];
   let hasChanges = false;
+  const hasNonEmpty = selections.some(s => !s.isEmpty);
 
   for (const selection of selections) {
+    if (hasNonEmpty && selection.isEmpty) continue;
+
     const selStart = document.offsetAt(selection.start);
     const selEnd = document.offsetAt(selection.end);
 
@@ -30,7 +34,8 @@ export default async function cycleQuotes(textEditor: vscode.TextEditor): Promis
       )
       .sort((a, b) => a.end - a.start - (b.end - b.start))[0];
 
-    if (!matched || processedOffsets.has(matched.start)) continue;
+    if (!matched) continue;
+    if (processedRanges.some(r => matched.start >= r.start && matched.end <= r.end)) continue;
 
     const line = document.lineAt(document.positionAt(matched.start).line);
     const lineStartOffset = document.offsetAt(line.range.start);
@@ -40,21 +45,22 @@ export default async function cycleQuotes(textEditor: vscode.TextEditor): Promis
     let replaceEnd = matched.end;
     let newText = '';
 
-    const currentIndex = QUOTE_ORDER.indexOf(matched.quote as (typeof QUOTE_ORDER)[number]);
-    if (currentIndex === -1) continue;
+    const nextQuote = getNextQuote(matched.quote, matched.enclosingQuote, matched.isAttrQuote, matched.isObjectKey);
+    if (!nextQuote || nextQuote === matched.quote) continue;
 
-    const nextQuote = QUOTE_ORDER[(currentIndex + 1) % QUOTE_ORDER.length];
+    const rawText = text.slice(matched.start, matched.end);
 
-    if (concatChain && nextQuote === '`') {
+    if (matched.isAttrQuote) {
+      newText = transformAttrQuotes(rawText, matched.quote, nextQuote);
+    } else if (concatChain && nextQuote === '`') {
       replaceStart = concatChain.start;
       replaceEnd = concatChain.end;
       newText = convertConcatToTemplate(concatChain.raw);
     } else {
-      const rawText = text.slice(matched.start, matched.end);
       newText = transformQuotes(rawText, matched.quote, nextQuote);
     }
 
-    processedOffsets.add(replaceStart);
+    processedRanges.push({ start: replaceStart, end: replaceEnd });
     editor.replace(new vscode.Range(document.positionAt(replaceStart), document.positionAt(replaceEnd)), newText);
     hasChanges = true;
   }

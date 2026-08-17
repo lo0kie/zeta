@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 type CommandHandler = (...args: any[]) => unknown;
 type TextEditorCommandHandler = (textEditor: vscode.TextEditor, edit: vscode.TextEditorEdit, ...args: any[]) => unknown;
 
+/** 把任意异常归一成可展示的字符串（Error 取 message，其余用 String() 兜底） */
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -22,6 +23,7 @@ export function registerCommand(command: string, handler: CommandHandler): vscod
   });
 }
 
+/** 与 registerCommand 同构的文本编辑器命令包装：异常同样统一捕获并提示用户 */
 export function registerTextEditorCommand(command: string, handler: TextEditorCommandHandler): vscode.Disposable {
   return vscode.commands.registerTextEditorCommand(command, async (textEditor, edit, ...args: any[]) => {
     try {

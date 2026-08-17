@@ -1,9 +1,9 @@
 // 样式悬浮：单层/复合/多行组、注释不伪匹配、变量、嵌套、minIndent、字符串大括号
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadModule, makeWorkspace, setConfig, cleanup, makeDocument } from './helpers.mjs';
+import { test } from 'node:test';
+import { cleanup, loadModule, makeDocument, makeWorkspace, setConfig } from './helpers.mjs';
 
 const { StyleHoverProvider } = await loadModule(`export { StyleHoverProvider } from './src/providers/style-hover';`);
 
@@ -73,9 +73,17 @@ test('变量悬浮：Less 变量与 CSS 变量展示解析值', async () => {
     const line1 = text.split('\n')[1];
     const at = await provider.provideHover(doc, { line: 1, character: line1.indexOf('@primary') + 4 });
     assert.ok(at, '@ 变量悬浮');
-    assert.ok(at.contents.value.includes('@primary: #1890ff;'), '展示解析值');
+    assert.ok(
+      at.contents.value.includes('#1890ff') && at.contents.value.includes('`@primary` 定义于 `theme.less`'),
+      '展示解析值'
+    );
     const cssVar = await provider.provideHover(doc, { line: 1, character: line1.indexOf('--main-bg') + 5 });
-    assert.ok(cssVar && cssVar.contents.value.includes('--main-bg: #fff;'), 'CSS 变量展示值');
+    assert.ok(
+      cssVar &&
+        cssVar.contents.value.includes('#fff') &&
+        cssVar.contents.value.includes('`--main-bg` 定义于 `theme.less`'),
+      'CSS 变量展示值'
+    );
   } finally {
     cleanup(ws);
   }
@@ -108,6 +116,35 @@ test('minIndent：首行缩进更深不削后续行字符', async () => {
     const value = hover.contents.value;
     assert.ok(value.includes('@media (x) {'), '@media 完整');
     assert.ok(value.includes('color: red'), 'color 完整未被削字');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('变量悬浮：单定义与多作用域展示格式', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    mkdirSync(join(ws, 'app'), { recursive: true });
+    writeFileSync(
+      join(ws, 'app', 'theme.less'),
+      `:root {\n  --color: #007aff;\n}\n.dark {\n  --color: #0a84ff;\n}\n@primary: #1890ff;\n`
+    );
+    const text = `@import "./theme";\n.a { color: @primary; background: var(--color); }\n`;
+    const doc = makeDocument(text, join(ws, 'app', 'm.less'), 'less');
+    const line1 = text.split('\n')[1];
+
+    const at = await provider.provideHover(doc, { line: 1, character: line1.indexOf('@primary') + 4 });
+    assert.ok(at);
+    assert.ok(at.contents.value.includes('#1890ff') && at.contents.value.includes('`@primary` 定义于 `theme.less`'));
+
+    const cssVar = await provider.provideHover(doc, { line: 1, character: line1.indexOf('--color') + 4 });
+    assert.ok(cssVar);
+    assert.ok(cssVar.contents.value.includes('`[:root]`'));
+    assert.ok(cssVar.contents.value.includes('#007aff'));
+    assert.ok(cssVar.contents.value.includes('`[.dark]`'));
+    assert.ok(cssVar.contents.value.includes('#0a84ff'));
+    assert.ok(cssVar.contents.value.includes('`--color` 定义于 `theme.less`'));
   } finally {
     cleanup(ws);
   }

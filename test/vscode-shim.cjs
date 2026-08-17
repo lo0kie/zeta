@@ -19,6 +19,13 @@ class Uri {
   }
 }
 
+class Location {
+  constructor(uri, rangeOrPosition) {
+    this.uri = uri;
+    this.range = rangeOrPosition;
+  }
+}
+
 class Position {
   constructor(line, character) {
     this.line = line;
@@ -30,6 +37,26 @@ class Position {
   compareTo(other) {
     if (this.line !== other.line) return this.line - other.line;
     return this.character - other.character;
+  }
+}
+
+class SemanticTokensLegend {
+  constructor(tokenTypes = [], tokenModifiers = []) {
+    this.tokenTypes = tokenTypes;
+    this.tokenModifiers = tokenModifiers;
+  }
+}
+
+class SemanticTokensBuilder {
+  constructor(legend) {
+    this.legend = legend;
+    this.tokens = [];
+  }
+  push(line, char, length, tokenType, tokenModifiers) {
+    this.tokens.push({ line, char, length, tokenType, tokenModifiers });
+  }
+  build() {
+    return { data: this.tokens };
   }
 }
 
@@ -84,11 +111,13 @@ class ColorPresentation {
 
 class CompletionItem {
   constructor(label, kind) {
-    this.label = label;
+    if (typeof label === 'object' && label !== null) {
+      this.label = label.label;
+      this.description = label.description;
+    } else {
+      this.label = label;
+    }
     this.kind = kind;
-    this.sortText = '';
-    this.range = null;
-    this.insertText = '';
   }
 }
 
@@ -148,7 +177,6 @@ class WorkspaceEdit {
   }
 }
 
-
 module.exports = {
   Uri,
   Position,
@@ -164,7 +192,10 @@ module.exports = {
   TreeItem,
   EventEmitter,
   WorkspaceEdit,
-  CompletionItemKind: { File: 1, Folder: 2, Variable: 3, Function: 4 },
+  Location,
+  SemanticTokensLegend,
+  SemanticTokensBuilder,
+  CompletionItemKind: { File: 1, Folder: 2, Variable: 3, Function: 4, Color: 16 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
   workspace: {
@@ -180,7 +211,6 @@ module.exports = {
           .map(e => [e.name, e.isDirectory() ? 2 : 1]),
     },
     getWorkspaceFolder: uri => {
-      // 运行时读取（测试按需注入），避免模块加载时的快照问题
       const wsRoot = globalThis.__zetaWsRoot;
       if (!wsRoot) return undefined;
       return uri.fsPath === wsRoot || uri.fsPath.startsWith(wsRoot + nodePath.sep)
@@ -188,7 +218,6 @@ module.exports = {
         : undefined;
     },
     getConfiguration: () => ({
-      // 同时接受完整键（'zeta.xxx'）与短键（'xxx'），测试按短键注入
       get: (key, fallback) => {
         const cfg = globalThis.__zetaCfg || {};
         if (key in cfg) return cfg[key];
@@ -226,6 +255,8 @@ module.exports = {
     registerCompletionItemProvider: () => ({ dispose() {} }),
     registerColorProvider: () => ({ dispose() {} }),
     registerHoverProvider: () => ({ dispose() {} }),
+    registerDefinitionProvider: () => ({ dispose() {} }),
+    registerDocumentSemanticTokensProvider: () => ({ dispose() {} }),
   },
   env: { openExternal: async () => true },
 };

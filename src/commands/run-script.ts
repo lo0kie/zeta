@@ -1,5 +1,5 @@
 import { Configuration } from '@/core/configuration';
-import { basename, dirname, findRootUri, isFile, resolveUriArgument } from '@/core/fs';
+import { basename, dirname, findRootUri, isFile, isSameUri, resolveUriArgument } from '@/core/fs';
 import { toNormalizePath } from '@/core/strings';
 import * as vscode from 'vscode';
 import { runInTerminal } from './terminal';
@@ -25,18 +25,28 @@ async function detectPackageManager(packageJsonUri: vscode.Uri, packageManagerFi
   const declared = packageManagerField?.split('@')[0];
   if (declared && KNOWN_PACKAGE_MANAGERS.has(declared)) return declared;
 
-  try {
-    const entries = await vscode.workspace.fs.readDirectory(dirname(packageJsonUri));
-    for (const [fileName] of entries) {
-      const manager = LOCK_FILE_MANAGERS[fileName];
-      if (manager) return manager;
-    }
-  } catch {
-    // 目录读取失败时静默回落到默认值
+  const workspaceRoot = vscode.workspace.getWorkspaceFolder(packageJsonUri)?.uri;
+  let current = dirname(packageJsonUri);
+
+  while (true) {
+    try {
+      const entries = await vscode.workspace.fs.readDirectory(current);
+      const fileNames = new Set(entries.map(([name]) => name));
+      for (const [lockFile, manager] of Object.entries(LOCK_FILE_MANAGERS)) {
+        if (fileNames.has(lockFile)) return manager;
+      }
+    } catch {}
+
+    if (workspaceRoot && isSameUri(current, workspaceRoot)) break;
+    const parent = dirname(current);
+    if (isSameUri(parent, current)) break;
+    current = parent;
   }
+
   return 'npm';
 }
 
+/** 运行 package.json 脚本：解析上下文目录 → 过滤非字符串 scripts → QuickPick 选择 → 探测包管理器并在终端执行 */
 export default async function runScript(arg?: unknown): Promise<void> {
   let targetUri = resolveUriArgument(arg);
 
@@ -73,13 +83,15 @@ export default async function runScript(arg?: unknown): Promise<void> {
   let packageManager: string | undefined;
   try {
     const rawContent = await vscode.workspace.fs.readFile(targetUri);
-    ({ scripts, packageManager } = JSON.parse(new TextDecoder().decode(rawContent)) ?? {});
+    const text = new TextDecoder().decode(rawContent).replace(/^\uFEFF/, '');
+    ({ scripts, packageManager } = JSON.parse(text) ?? {});
   } catch {
     await vscode.window.showErrorMessage('无法正确解析该 package.json 文件');
     return;
   }
 
-  const scriptNames = Object.keys(scripts ?? {});
+  const scriptNames = Object.keys(scripts ?? {}).filter(key => typeof scripts?.[key] === 'string');
+
   if (scriptNames.length === 0) {
     await vscode.window.showWarningMessage('package.json 中未配置任何 scripts 脚本');
     return;
@@ -105,9 +117,10 @@ export default async function runScript(arg?: unknown): Promise<void> {
   const workingDir = dirname(targetUri);
   const manager = await detectPackageManager(targetUri, packageManager);
 
+  const scriptName = picked.label.includes(' ') ? `"${picked.label.replace(/"/g, '\\"')}"` : picked.label;
   const runCmd = extraArgs?.trim()
-    ? `${manager} run ${picked.label} -- ${extraArgs.trim()}`
-    : `${manager} run ${picked.label}`;
+    ? `${manager} run ${scriptName} -- ${extraArgs.trim()}`
+    : `${manager} run ${scriptName}`;
 
   await runInTerminal({
     cwd: workingDir,

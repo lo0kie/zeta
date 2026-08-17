@@ -135,3 +135,5 @@ dist
 .pnp.*
 
 all_code.txt
+.workbuddy
+docs

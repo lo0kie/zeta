@@ -22,7 +22,10 @@ const aliasContextCache = new TtlCache<AliasContext | undefined>(ALIAS_CACHE_TTL
 
 /** tsconfig/jsconfig 是 JSONC：剥离注释与尾随逗号后再 JSON.parse */
 function stripJsonc(content: string): string {
-  return content.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '').replace(/,\s*([\]}])/g, '$1');
+  const noComments = content.replace(/"(?:\\.|[^"\\\r\n])*?"|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n]*/g, match =>
+    match.startsWith('/') ? '' : match
+  );
+  return noComments.replace(/("(?:\\.|[^"\\\r\n])*?")|,\s*([\]}])/g, (match, str, brace) => (str ? str : brace));
 }
 
 /** 读取 compilerOptions 的 paths 与 baseUrl（配置缺失或解析失败时返回 undefined） */
@@ -118,6 +121,8 @@ export async function resolveAliasCandidates(
   // 让 "@": ["src"] 这类配置也能承接 '@/...' 的补全。
   const matched = context.aliases.find(({ key }) => {
     if (key.endsWith('/*')) return rawPath.startsWith(key.slice(0, -1));
+    // 新增：如果别名显式以 / 结尾（如 "@components/"），使用精确前缀匹配
+    if (key.endsWith('/')) return rawPath.startsWith(key);
     return rawPath === key || rawPath.startsWith(key + '/');
   });
   if (!matched) return undefined;

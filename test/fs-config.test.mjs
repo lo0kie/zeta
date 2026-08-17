@@ -9,8 +9,8 @@ import { loadModule, makeWorkspace, setConfig, cleanup, shimPath } from './helpe
 const require = createRequire(import.meta.url);
 const { Uri } = require(shimPath);
 
-const { parseUriList, findRootUri, basename } = await loadModule(`
-  export { parseUriList, findRootUri, basename } from './src/core/fs';
+const { parseUriList, findRootUri, basename, isSameUri } = await loadModule(`
+  export { parseUriList, findRootUri, basename, isSameUri } from './src/core/fs';
   export { Configuration } from './src/core/configuration';
 `);
 
@@ -77,4 +77,21 @@ test('Configuration 类型回落：脏配置不流入业务', () => {
   } finally {
     cleanup(ws);
   }
+});
+
+test('isSameUri：Windows 大小写不敏感，其余平台精确', () => {
+  const a = Uri.file('/workspace/proj/src');
+  assert.equal(isSameUri(a, a), true);
+  assert.equal(isSameUri(a, undefined), false);
+  assert.equal(isSameUri(undefined, a), false);
+  assert.equal(isSameUri(a, Uri.file('/workspace/proj/dist')), false);
+
+  const winA = Uri.file('C:/Workspace/Proj');
+  const winB = Uri.file('c:/workspace/proj');
+  // 断言行为与平台一致：Windows 上忽略大小写，POSIX 上区分
+  assert.equal(
+    isSameUri(winA, winB),
+    process.platform === 'win32',
+    'Windows 大小写不敏感，其余平台精确比较'
+  );
 });

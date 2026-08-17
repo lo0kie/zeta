@@ -1,10 +1,10 @@
 // 路径别名与路径补全：JSONC/baseUrl/多target/最长key/负缓存、截断/@守卫/readDir缓存/自身过滤
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { loadModule, makeWorkspace, setConfig, cleanup, makeDocument, countFs, shimPath } from './helpers.mjs';
+import { test } from 'node:test';
+import { cleanup, countFs, loadModule, makeDocument, makeWorkspace, setConfig, shimPath } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
 const { Uri } = require(shimPath);
@@ -81,19 +81,29 @@ test('path-completion：readDirectory 缓存 + 目录优先截断', async () => 
     const text = `import x from './big/`;
     const provider = new PathCompletionProvider();
     const doc = makeDocument(text, join(ws, 'main.ts'), 'typescript');
-    const position = { line: 0, character: text.length, translate: (dl, dc) => ({ line: 0, character: text.length + dc }) };
+    const position = {
+      line: 0,
+      character: text.length,
+      translate: (dl, dc) => ({ line: 0, character: text.length + dc }),
+    };
 
     const counter = countFs('readDirectory');
     try {
       const items1 = (await provider.provideCompletionItems(doc, position)) ?? [];
       assert.equal(counter.count(), 1, '首次读盘');
       assert.equal(items1.length, 200, '截断 200');
-      assert.ok(items1.slice(0, 10).every(i => i.insertText.endsWith('/')), '目录优先且保留');
+      assert.ok(
+        items1.slice(0, 10).every(i => i.insertText.endsWith('/')),
+        '目录优先且保留'
+      );
 
       const items2 = (await provider.provideCompletionItems(doc, position)) ?? [];
       assert.equal(counter.count(), 1, '缓存命中不重读盘');
       assert.equal(items2.length, 200, '缓存结果仍为截断');
-      assert.ok(items2.slice(0, 10).every(i => i.insertText.endsWith('/')), '缓存结果仍目录优先');
+      assert.ok(
+        items2.slice(0, 10).every(i => i.insertText.endsWith('/')),
+        '缓存结果仍目录优先'
+      );
     } finally {
       counter.restore();
     }
@@ -144,13 +154,95 @@ test('path-completion：同级补全排除当前文件自身', async () => {
     const text = `import x from './`;
     const doc = makeDocument(text, join(dir, 'b.ts'), 'typescript');
     const provider = new PathCompletionProvider();
-    const items = (await provider.provideCompletionItems(doc, {
-      line: 0,
-      character: text.length,
-      translate: (dl, dc) => ({ line: 0, character: text.length + dc }),
-    })) ?? [];
+    const items =
+      (await provider.provideCompletionItems(doc, {
+        line: 0,
+        character: text.length,
+        translate: (dl, dc) => ({ line: 0, character: text.length + dc }),
+      })) ?? [];
     const labels = items.map(i => i.label).sort();
     assert.deepEqual(labels, ['a.ts'], 'b.ts 自身不在候选中');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('path-completion：裸模块名不误触发补全', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const doc = makeDocument("import lodash from 'lodash", join(ws, 'a.ts'), 'typescript');
+    const provider = new PathCompletionProvider();
+    const items = await provider.provideCompletionItems(doc, {
+      line: 0,
+      character: 26,
+      translate: (l, c) => ({ line: 0, character: 26 + c }),
+    });
+    assert.equal(items, undefined);
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('path-completion：/src 绝对路径无尾斜杠时补全根目录', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const srcDir = join(ws, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, 'app.ts'), '');
+
+    const doc = makeDocument("import x from '/src", join(ws, 'main.ts'), 'typescript');
+    const provider = new PathCompletionProvider();
+    const items = await provider.provideCompletionItems(doc, {
+      line: 0,
+      character: 19,
+      translate: (l, c) => ({ line: 0, character: 19 + c }),
+    });
+    assert.ok(items?.some(i => i.label === 'src'), '根目录下 src 在列');
+    assert.ok(!items?.some(i => i.label === 'app.ts'), 'src 目录内容不应出现在根目录补全');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('path-completion：/src/ 带尾斜杠时补全 src 目录内容', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const srcDir = join(ws, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, 'app.ts'), '');
+
+    const doc = makeDocument("import x from '/src/", join(ws, 'main.ts'), 'typescript');
+    const provider = new PathCompletionProvider();
+    const items = await provider.provideCompletionItems(doc, {
+      line: 0,
+      character: 20,
+      translate: (l, c) => ({ line: 0, character: 20 + c }),
+    });
+    assert.ok(items?.some(i => i.label === 'app.ts'), 'src 目录内容在列');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('path-completion：/src/ap 中间态补全 src 目录（非 src/ap）', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const srcDir = join(ws, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(join(srcDir, 'app.ts'), '');
+
+    const doc = makeDocument("import x from '/src/ap", join(ws, 'main.ts'), 'typescript');
+    const provider = new PathCompletionProvider();
+    const items = await provider.provideCompletionItems(doc, {
+      line: 0,
+      character: 21,
+      translate: (l, c) => ({ line: 0, character: 21 + c }),
+    });
+    assert.ok(items?.some(i => i.label === 'app.ts'), '浏览的是 src 目录，ap 前缀可命中 app.ts');
   } finally {
     cleanup(ws);
   }

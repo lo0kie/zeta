@@ -9,6 +9,10 @@ export default class Editor {
 
   constructor(private _uri: vscode.Uri) {}
 
+  /**
+   * 单点插入；另有批量（positions + texts）与行列数字重载。
+   * 所有编辑先收集到内部 WorkspaceEdit，apply() 时一次性原子提交。
+   */
   insert(position: vscode.Position, newText: string): this;
   insert(positions: vscode.Position[], newTexts: string[] | string): this;
   insert(line: number, character: number, newText: string): this;
@@ -21,7 +25,7 @@ export default class Editor {
       this._edit.insert(this._uri, first, second);
     } else if (Array.isArray(first)) {
       for (const [index, position] of first.entries()) {
-        const text = Array.isArray(second) ? second[index] : (second as string);
+        const text = Array.isArray(second) ? (second[index] ?? '') : (second as string);
         this._edit.insert(this._uri, position, text);
       }
     } else if (typeof first === 'number' && typeof second === 'number') {
@@ -30,6 +34,10 @@ export default class Editor {
     return this;
   }
 
+  /**
+   * 区间替换；另有批量（ranges + texts）与「起止 Position / 行列数字」重载，
+   * 均按原文档坐标收集，apply() 时统一提交。
+   */
   replace(range: vscode.Range, newText: string): this;
   replace(ranges: vscode.Range[], newTexts: string[] | string): this;
   replace(startPosition: vscode.Position, endPosition: vscode.Position, newText: string): this;
@@ -45,7 +53,7 @@ export default class Editor {
       this._edit.replace(this._uri, first, second);
     } else if (Array.isArray(first)) {
       for (const [index, item] of first.entries()) {
-        const text = Array.isArray(second) ? second[index] : (second as string);
+        const text = Array.isArray(second) ? (second[index] ?? '') : (second as string);
         this._edit.replace(this._uri, item, text);
       }
     } else if (first instanceof vscode.Position && second instanceof vscode.Position && typeof third === 'string') {

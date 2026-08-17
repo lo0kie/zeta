@@ -1,38 +1,61 @@
-// 生成 all_code.txt：把 src 下全部 TypeScript 源码整理为 markdown 文档，
-// 每个文件一段代码块（只保留一遍源码），路径为标题。用于给 AI 提供完整项目上下文。
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SOURCE_DIR = 'src';
+const SOURCE_DIRS = ['src', 'test'];
 const OUTPUT_FILE = 'all_code.txt';
+const TARGET_EXTENSIONS = ['.ts', '.tsx', '.vue', '.less', '.css', '.json', '.js', '.mjs'];
+const LANG_MAP = {
+  '.ts': 'typescript',
+  '.tsx': 'typescriptreact',
+  '.js': 'javascript',
+  '.mjs': 'javascript',
+  '.vue': 'vue',
+  '.less': 'less',
+  '.css': 'css',
+  '.scss': 'scss',
+  '.json': 'json',
+};
 
 function collectTsFiles(dir, list = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) collectTsFiles(full, list);
-    else if (entry.isFile() && entry.name.endsWith('.ts')) list.push(full);
+    if (entry.isDirectory()) {
+      collectTsFiles(full, list);
+    } else if (entry.isFile() && TARGET_EXTENSIONS.some(ext => entry.name.endsWith(ext))) {
+      list.push(full);
+    }
   }
   return list;
 }
 
 function main() {
-  const srcPath = path.resolve(process.cwd(), SOURCE_DIR);
-  if (!fs.existsSync(srcPath)) {
-    console.error(`目录 "${srcPath}" 不存在`);
-    process.exit(1);
-  }
+  const allFiles = SOURCE_DIRS.flatMap(dir => {
+    const dirPath = path.resolve(process.cwd(), dir);
+    if (!fs.existsSync(dirPath)) {
+      console.warn(`目录 "${dirPath}" 不存在，已跳过`);
+      return [];
+    }
+    return collectTsFiles(dirPath);
+  });
 
-  const files = collectTsFiles(srcPath)
+  const files = Array.from(new Set(allFiles))
     .map(full => path.relative(process.cwd(), full))
     .sort();
 
+  if (files.length === 0) {
+    console.error('未找到任何源文件');
+    process.exit(1);
+  }
+
   const sections = files.map(rel => {
     const relPosix = rel.replace(/\\/g, '/');
+    const ext = path.extname(rel);
+    const lang = LANG_MAP[ext] || 'text';
     const content = fs.readFileSync(rel, 'utf8').replace(/\r\n/g, '\n').replace(/\n*$/, '');
-    return `## ${relPosix}\n\n\`\`\`typescript\n${content}\n\`\`\``;
+    return `## ${relPosix}\n\n\`\`\`${lang}\n${content}\n\`\`\``;
   });
 
-  const header = `# zeta 源码\n\n共 ${files.length} 个 TypeScript 文件。\n\n---\n\n`;
+  const header = `# zeta 源码\n\n共 ${files.length} 个源文件。\n\n---\n\n`;
   const output = header + sections.join('\n\n---\n\n') + '\n';
 
   fs.writeFileSync(path.resolve(process.cwd(), OUTPUT_FILE), output, 'utf8');

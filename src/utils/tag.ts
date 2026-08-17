@@ -1,3 +1,4 @@
+﻿import { escapeRegExp } from '@/core/strings';
 import * as vscode from 'vscode';
 
 export interface MatchedTagPair {
@@ -6,7 +7,6 @@ export interface MatchedTagPair {
   isMultiLine: boolean;
 }
 
-/** HTML 无闭合标签白名单：不会压入配对栈，避免其后所有标签配对错位 */
 const VOID_ELEMENTS = new Set([
   'area',
   'base',
@@ -22,6 +22,45 @@ const VOID_ELEMENTS = new Set([
   'source',
   'track',
   'wbr',
+  'path',
+  'rect',
+  'circle',
+  'line',
+  'polyline',
+  'polygon',
+  'ellipse',
+  'use',
+  'stop',
+  'image',
+  'animate',
+  'animatemotion',
+  'animatetransform',
+  'set',
+  'feblend',
+  'fecolormatrix',
+  'fecomponenttransfer',
+  'fecomposite',
+  'feconvolvematrix',
+  'fediffuselighting',
+  'fedisplacementmap',
+  'fedistantlight',
+  'fedropshadow',
+  'feflood',
+  'fefunca',
+  'fefuncb',
+  'fefuncg',
+  'fefuncr',
+  'fegaussianblur',
+  'feimage',
+  'femerge',
+  'femergenode',
+  'femorphology',
+  'feoffset',
+  'fepointlight',
+  'fespecularlighting',
+  'fespotlight',
+  'fetile',
+  'feturbulence',
 ]);
 
 interface TagInfo {
@@ -29,14 +68,9 @@ interface TagInfo {
   selfClosing: boolean;
   closing: boolean;
   start: number;
-  end: number; // '>' 的索引
+  end: number;
 }
 
-/**
- * 扫描 text[start]（必为 '<'）处的一个标签。
- * 属性内引号与 {…} 表达式整体跳过（JSX onClick={() => x > 5}、Vue :style="{...}" 里的
- * > 不会提前截断标签）；返回 undefined 表示此处不是标签（如 a < b 的比较符）。
- */
 function scanTag(text: string, start: number): TagInfo | undefined {
   let i = start + 1;
   const closing = text[i] === '/';
@@ -48,34 +82,49 @@ function scanTag(text: string, start: number): TagInfo | undefined {
   const name = text.slice(nameStart, i);
 
   let braceDepth = 0;
+  let inQuote: string | null = null;
+  const templateBraceDepth: number[] = [];
+
   while (i < text.length) {
     const c = text[i];
-    if (c === '"' || c === "'") {
-      const quote = c;
-      i++;
-      while (i < text.length && text[i] !== quote) {
-        if (text[i] === '\\') i++;
+    const next = text[i + 1];
+
+    if (inQuote) {
+      if (c === '\\') {
         i++;
+      } else if (inQuote === '`' && c === '$' && next === '{') {
+        // 记录进入 ${} 时的外部括号深度，并暂时退出引号状态
+        templateBraceDepth.push(braceDepth);
+        inQuote = null;
+      } else if (c === inQuote) {
+        inQuote = null;
       }
-      i++;
-      continue;
+    } else {
+      if (c === '"' || c === "'" || c === '`') {
+        inQuote = c;
+      } else if (c === '{') {
+        braceDepth++;
+      } else if (c === '}') {
+        if (braceDepth > 0) braceDepth--;
+        // 如果当前括号深度回落到了最近一次插值 ${} 开始前的深度，说明插值结束，恢复模板字符串状态
+        if (templateBraceDepth.length > 0 && braceDepth === templateBraceDepth[templateBraceDepth.length - 1]) {
+          templateBraceDepth.pop();
+          inQuote = '`';
+        }
+      } else if (c === '>' && braceDepth === 0) {
+        break;
+      }
     }
-    if (c === '{') {
-      braceDepth++;
-      i++;
-      continue;
-    }
-    if (c === '}') {
-      if (braceDepth > 0) braceDepth--;
-      i++;
-      continue;
-    }
-    if (c === '>' && braceDepth === 0) break;
     i++;
   }
-  if (i >= text.length) return undefined; // 未闭合的 '<'，忽略
 
-  return { name, selfClosing: text[i - 1] === '/', closing, start, end: i };
+  if (i >= text.length) return undefined;
+
+  let j = i - 1;
+  while (j > nameStart && /\s/.test(text[j])) j--;
+  const selfClosing = text[j] === '/';
+
+  return { name, selfClosing, closing, start, end: i };
 }
 
 interface RawPair {
@@ -83,7 +132,6 @@ interface RawPair {
   close: { start: number; end: number };
 }
 
-/** 单次扫描整篇文本的全部标签配对（O(n)），供多光标/多次查询复用 */
 export function scanTagPairs(text: string): RawPair[] {
   const stack: { name: string; start: number; end: number }[] = [];
   const pairs: RawPair[] = [];
@@ -92,11 +140,38 @@ export function scanTagPairs(text: string): RawPair[] {
   while (true) {
     const lt = text.indexOf('<', searchFrom);
     if (lt === -1) break;
+
+    // --- 新增：跨越 HTML 注释，防止内部残缺标签污染配对栈 ---
+    if (text.startsWith('<!--', lt)) {
+      const commentEnd = text.indexOf('-->', lt + 4);
+      searchFrom = commentEnd !== -1 ? commentEnd + 3 : text.length;
+      continue;
+    }
+
     searchFrom = lt + 1;
 
     const tag = scanTag(text, lt);
     if (!tag) continue;
     if (tag.selfClosing || VOID_ELEMENTS.has(tag.name.toLowerCase())) continue;
+
+    const lowerName = tag.name.toLowerCase();
+    if (!tag.closing && (lowerName === 'script' || lowerName === 'style')) {
+      const closePattern = new RegExp(`</${escapeRegExp(tag.name)}\\b[^>]*>`, 'gi');
+      closePattern.lastIndex = tag.end + 1;
+      const endMatch = closePattern.exec(text);
+      if (endMatch) {
+        pairs.push({
+          open: { name: tag.name, start: tag.start, end: tag.end + 1 },
+          close: { start: endMatch.index, end: endMatch.index + endMatch[0].length },
+        });
+        searchFrom = endMatch.index + endMatch[0].length;
+        continue;
+      } else {
+        // 新增：遇到未闭合的 script/style 块直接中止扫描
+        // 防止将脚本内部的纯文本 < 或 > 当作真实 HTML 标签解析而导致栈污染
+        break;
+      }
+    }
 
     if (tag.closing) {
       for (let i = stack.length - 1; i >= 0; i--) {
@@ -115,44 +190,10 @@ export function scanTagPairs(text: string): RawPair[] {
   return pairs;
 }
 
-/** 取包含指定偏移的最内层标签对 */
-function findPairAt(pairs: RawPair[], offset: number): RawPair | undefined {
-  return pairs
-    .filter(p => p.open.start <= offset && p.close.end >= offset)
-    .sort((a, b) => b.open.start - a.open.start || a.close.end - b.close.end)[0];
-}
-
-export function findEnclosingTags(document: vscode.TextDocument, position: vscode.Position): MatchedTagPair | undefined {
-  const offset = document.offsetAt(position);
-  const enclosing = findPairAt(scanTagPairs(document.getText()), offset);
-  if (!enclosing) return undefined;
-
-  const openTagRange = new vscode.Range(
-    document.positionAt(enclosing.open.start),
-    document.positionAt(enclosing.open.end)
-  );
-  const closeTagRange = new vscode.Range(
-    document.positionAt(enclosing.close.start),
-    document.positionAt(enclosing.close.end)
-  );
-  return {
-    openTagRange,
-    closeTagRange,
-    isMultiLine: openTagRange.start.line !== closeTagRange.end.line,
-  };
-}
-
-/** 单次扫描文档的全部标签对（含 range），供 unwrapTags 多选区场景复用，避免每选区整文档重扫 */
 export function findAllTagPairs(document: vscode.TextDocument): MatchedTagPair[] {
   return scanTagPairs(document.getText()).map(pair => {
-    const openTagRange = new vscode.Range(
-      document.positionAt(pair.open.start),
-      document.positionAt(pair.open.end)
-    );
-    const closeTagRange = new vscode.Range(
-      document.positionAt(pair.close.start),
-      document.positionAt(pair.close.end)
-    );
+    const openTagRange = new vscode.Range(document.positionAt(pair.open.start), document.positionAt(pair.open.end));
+    const closeTagRange = new vscode.Range(document.positionAt(pair.close.start), document.positionAt(pair.close.end));
     return {
       openTagRange,
       closeTagRange,
@@ -161,9 +202,15 @@ export function findAllTagPairs(document: vscode.TextDocument): MatchedTagPair[]
   });
 }
 
-/** 取包含指定偏移的最内层标签对（带 range 版本） */
-export function findTagPairAt(pairs: MatchedTagPair[], document: vscode.TextDocument, offset: number): MatchedTagPair | undefined {
+export function findTagPairAt(
+  pairs: MatchedTagPair[],
+  document: vscode.TextDocument,
+  offset: number
+): MatchedTagPair | undefined {
   return pairs
     .filter(p => document.offsetAt(p.openTagRange.start) <= offset && document.offsetAt(p.closeTagRange.end) >= offset)
-    .sort((a, b) => b.openTagRange.start.compareTo(a.openTagRange.start) || a.closeTagRange.end.compareTo(b.closeTagRange.end))[0];
+    .sort(
+      (a, b) =>
+        b.openTagRange.start.compareTo(a.openTagRange.start) || a.closeTagRange.end.compareTo(b.closeTagRange.end)
+    )[0];
 }

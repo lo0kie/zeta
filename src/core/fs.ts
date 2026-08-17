@@ -15,12 +15,12 @@ export function dirname(uri: vscode.Uri): vscode.Uri {
  * 解析用户在 zeta.list.folders 中配置的目录：
  * 绝对路径直接使用，相对路径基于第一个工作区根目录。
  */
-export function resolveConfiguredFolderUri(folder: string): vscode.Uri {
+export function resolveConfiguredFolderUri(folder: string): vscode.Uri | undefined {
   const normalized = folder.replace(/\\/g, '/');
   if (isAbsolute(normalized)) return vscode.Uri.file(normalized);
 
   const rootUri = vscode.workspace.workspaceFolders?.[0]?.uri;
-  return rootUri ? vscode.Uri.joinPath(rootUri, normalized) : vscode.Uri.file(normalized);
+  return rootUri ? vscode.Uri.joinPath(rootUri, normalized) : undefined;
 }
 
 /** stat 的安全封装：路径不存在或不可访问时返回 undefined，而不是抛异常 */
@@ -31,6 +31,14 @@ export async function statSafe(uri: vscode.Uri | undefined): Promise<vscode.File
   } catch {
     return undefined;
   }
+}
+
+/** 两个 uri 是否指向同一路径：Windows 大小写不敏感，其余平台精确比较 */
+export function isSameUri(a: vscode.Uri | undefined, b: vscode.Uri | undefined): boolean {
+  if (!a || !b) return false;
+  return process.platform === 'win32'
+    ? a.fsPath.toLowerCase() === b.fsPath.toLowerCase()
+    : a.toString() === b.toString();
 }
 
 /**
@@ -51,10 +59,12 @@ export function resolveUriArgument(arg: unknown): vscode.Uri | undefined {
   return undefined;
 }
 
+/** 判断 uri 是否为普通文件（不存在或不可读返回 false） */
 export async function isFile(uri: vscode.Uri | undefined): Promise<boolean> {
   return (await statSafe(uri))?.type === vscode.FileType.File;
 }
 
+/** 判断 uri 是否为目录（不存在或不可读返回 false） */
 export async function isDirectory(uri: vscode.Uri | undefined): Promise<boolean> {
   return (await statSafe(uri))?.type === vscode.FileType.Directory;
 }
@@ -72,9 +82,10 @@ export async function findRootUri(uri = vscode.window.activeTextEditor?.document
     }
 
     // 到达工作区根目录或文件系统顶层时停止向上遍历，避免无谓的磁盘探测
-    if (workspaceRoot && current.toString() === workspaceRoot.toString()) break;
+    // （Windows 文件系统大小写不敏感，比较时忽略大小写差异）
+    if (workspaceRoot && isSameUri(current, workspaceRoot)) break;
     const parent = dirname(current);
-    if (parent.toString() === current.toString()) break;
+    if (isSameUri(parent, current)) break;
     current = parent;
   }
 
@@ -98,12 +109,12 @@ export function parseUriList(uriList: string): vscode.Uri[] {
       let rest = trimmed.slice('file://'.length);
       if (!rest) continue;
 
-      if (rest[0] !== '/') {
+      if (/^\/?[A-Za-z]:/.test(rest)) {
+        // 盘符：file:///C:/... 或 file://C:/... → C:/...
+        rest = rest.replace(/^\//, '');
+      } else if (rest[0] !== '/') {
         // UNC：file://host/share/... → //host/share/...
         rest = `//${rest}`;
-      } else if (/^\/?[A-Za-z]:/.test(rest)) {
-        // 盘符：file:///C:/... → C:/...
-        rest = rest.slice(1);
       }
 
       try {

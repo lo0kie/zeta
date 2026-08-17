@@ -1,111 +1,147 @@
-import Editor from '@/core/editor';
+import { indentUnit, leadingIndent } from '@/utils/edits';
 import * as vscode from 'vscode';
 
-// 取选区；空选区时回落为当前整行（空行放弃）
-function resolveTargetRange(textEditor: vscode.TextEditor): vscode.Range | undefined {
-  const { selections, document } = textEditor;
-  const selection = selections[0];
-  if (!selection) return undefined;
-  if (!selection.isEmpty) return selection;
-
-  const line = document.lineAt(selection.active.line);
-  return line.range.isEmpty ? undefined : line.range;
-}
-
-/** 把选区扩展为覆盖首末行整行：非整行选区（起始列 > 0）自带行首缩进，
- *  直接替换会让模板首行的 baseIndent 与行首缩进叠加导致排版错位 */
 function expandToFullLines(document: vscode.TextDocument, range: vscode.Range): vscode.Range {
   const startLine = document.lineAt(range.start.line);
-  const endLine = document.lineAt(range.end.line);
+  // 如果选区刚好结束于下一行的行首，将其钳制回上一行
+  const endLineNum =
+    range.end.character === 0 && range.end.line > range.start.line ? range.end.line - 1 : range.end.line;
+  const endLine = document.lineAt(endLineNum);
   return new vscode.Range(startLine.range.start, endLine.range.end);
 }
 
-function indentUnit(options: vscode.TextEditorOptions): string {
-  return options.insertSpaces ? ' '.repeat(Number(options.tabSize)) : '\t';
-}
-
-function leadingIndent(text: string): string {
-  return text.match(/^[\t ]*/)?.[0] ?? '';
-}
-
-/** 整体替换选区并把光标/选区定位到新文本的指定锚点 */
-async function replaceAndSelect(
-  textEditor: vscode.TextEditor,
-  range: vscode.Range,
-  newText: string,
-  anchor?: vscode.Position | vscode.Range
-): Promise<void> {
-  const editor = new Editor(textEditor.document.uri);
-  editor.replace(range, newText);
-  if (!(await editor.apply())) return;
-
-  if (anchor) {
-    const selection =
-      anchor instanceof vscode.Position
-        ? new vscode.Selection(anchor, anchor)
-        : new vscode.Selection(anchor.start, anchor.end);
-    textEditor.selections = [selection];
-    textEditor.revealRange(selection);
-  }
-}
-
-/** 选区整体加深一级缩进：每行在自身缩进基础上加一级（首行缩进已含在 range 文本里，不再额外叠加） */
 function indentBody(text: string, unit: string): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
   return text
-    .split('\n')
+    .split(/\r?\n/)
     .map(line => (line.trim().length === 0 ? line : unit + line))
-    .join('\n');
+    .join(eol);
 }
 
-/** 包裹为 console.log(...)，光标落在左括号后 */
+/** 转义 Snippet 语法保留字符（$、}、\），防止原代码内容被 Snippet 引擎误解析 */
+function escapeSnippetText(text: string): string {
+  return text.replace(/[$}\\]/g, '\\$&');
+}
+
+function getTargetRanges(textEditor: vscode.TextEditor, expandFull: boolean): vscode.Range[] {
+  const { selections, document } = textEditor;
+  const rawRanges: vscode.Range[] = [];
+  const hasNonEmpty = selections.some(s => !s.isEmpty);
+
+  for (const sel of selections) {
+    if (hasNonEmpty && sel.isEmpty) continue;
+    let range: vscode.Range | undefined;
+    if (!sel.isEmpty) {
+      range = sel;
+    } else {
+      const line = document.lineAt(sel.active.line);
+      if (!line.range.isEmpty) {
+        range = line.range;
+      }
+    }
+    if (range) {
+      rawRanges.push(expandFull ? expandToFullLines(document, range) : range);
+    }
+  }
+
+  if (rawRanges.length === 0) return [];
+
+  rawRanges.sort((a, b) => a.start.compareTo(b.start));
+  const merged: vscode.Range[] = [rawRanges[0]];
+
+  for (let i = 1; i < rawRanges.length; i++) {
+    const current = rawRanges[i];
+    const last = merged[merged.length - 1];
+    if (current.start.compareTo(last.end) <= 0) {
+      if (current.end.compareTo(last.end) > 0) {
+        merged[merged.length - 1] = new vscode.Range(last.start, current.end);
+      }
+    } else {
+      merged.push(current);
+    }
+  }
+
+  return merged;
+}
+
 export async function wrapWithConsole(textEditor: vscode.TextEditor): Promise<void> {
-  const range = resolveTargetRange(textEditor);
-  if (!range) return;
+  const { document } = textEditor;
+  const ranges = getTargetRanges(textEditor, false);
+  if (ranges.length === 0) return;
 
-  const text = textEditor.document.getText(range);
-  const cursor = range.start.translate(0, 'console.log('.length);
-  await replaceAndSelect(textEditor, range, `console.log(${text})`, cursor);
+  let snippetText = '';
+  let lastPos = ranges[0].start;
+
+  ranges.forEach((range, index) => {
+    if (range.start.compareTo(lastPos) > 0) {
+      const gapText = document.getText(new vscode.Range(lastPos, range.start));
+      snippetText += escapeSnippetText(gapText);
+    }
+
+    const baseIndent = range.start.character === 0 ? leadingIndent(document.lineAt(range.start.line).text) : '';
+    const rawText = document.getText(range);
+    const text = rawText.trim().replace(/;+$/, '');
+    const tabIndex = index + 1;
+
+    snippetText += `${baseIndent}console.log(${escapeSnippetText(text)}\$${tabIndex})`;
+    lastPos = range.end;
+  });
+
+  const spanRange = new vscode.Range(ranges[0].start, ranges[ranges.length - 1].end);
+  await textEditor.insertSnippet(new vscode.SnippetString(snippetText), spanRange);
 }
 
-/** 包裹为 try/catch，光标落在 catch 块内等待输入处理逻辑 */
 export async function wrapWithTryCatch(textEditor: vscode.TextEditor): Promise<void> {
-  const rawRange = resolveTargetRange(textEditor);
-  if (!rawRange) return;
-
   const { document, options } = textEditor;
-  // 非整行选区先扩展为整行，避免模板首行 baseIndent 与行首缩进叠加
-  const range = expandToFullLines(document, rawRange);
+  const ranges = getTargetRanges(textEditor, true);
+  if (ranges.length === 0) return;
+
   const unit = indentUnit(options);
-  const baseIndent = leadingIndent(document.lineAt(range.start.line).text);
-  // body 每行只加一级缩进：首行已含自身 baseIndent（整行 range），wrapped 首行补 baseIndent
-  const body = indentBody(document.getText(range), unit);
+  let snippetText = '';
+  let lastPos = ranges[0].start;
 
-  const wrapped = `${baseIndent}try {\n${body}\n${baseIndent}} catch (error) {\n${baseIndent}${unit}\n${baseIndent}}`;
-  // wrapped 结构：try 头(1) + body(n) + catch 头(1)，光标落在 catch 块的占位行
-  const bodyLineCount = body.split('\n').length;
-  const cursor = new vscode.Position(range.start.line + bodyLineCount + 2, (baseIndent + unit).length);
+  ranges.forEach((range, index) => {
+    if (range.start.compareTo(lastPos) > 0) {
+      const gapText = document.getText(new vscode.Range(lastPos, range.start));
+      snippetText += escapeSnippetText(gapText);
+    }
 
-  await replaceAndSelect(textEditor, range, wrapped, cursor);
+    const baseIndent = leadingIndent(document.lineAt(range.start.line).text);
+    const body = indentBody(document.getText(range), unit);
+    const tabError = index * 2 + 1;
+    const tabBody = index * 2 + 2;
+
+    snippetText += `${baseIndent}try {\n${escapeSnippetText(body)}\n${baseIndent}} catch (\${${tabError}:error}) {\n${baseIndent}${unit}\$${tabBody}\n${baseIndent}}`;
+    lastPos = range.end;
+  });
+
+  const spanRange = new vscode.Range(ranges[0].start, ranges[ranges.length - 1].end);
+  await textEditor.insertSnippet(new vscode.SnippetString(snippetText), spanRange);
 }
 
-/** 包裹为 if 语句，自动选中条件占位符 true 便于直接输入 */
 export async function wrapWithIf(textEditor: vscode.TextEditor): Promise<void> {
-  const rawRange = resolveTargetRange(textEditor);
-  if (!rawRange) return;
-
   const { document, options } = textEditor;
-  // 非整行选区先扩展为整行，避免模板首行 baseIndent 与行首缩进叠加
-  const range = expandToFullLines(document, rawRange);
+  const ranges = getTargetRanges(textEditor, true);
+  if (ranges.length === 0) return;
+
   const unit = indentUnit(options);
-  const baseIndent = leadingIndent(document.lineAt(range.start.line).text);
-  const body = indentBody(document.getText(range), unit);
+  let snippetText = '';
+  let lastPos = ranges[0].start;
 
-  const wrapped = `${baseIndent}if (true) {\n${body}\n${baseIndent}}`;
-  // "if (" 占 4 列，true 为 baseIndent 之后 4~8 列（替换后行首被 baseIndent 顶开）
-  const condition = new vscode.Range(
-    range.start.translate(0, baseIndent.length + 4),
-    range.start.translate(0, baseIndent.length + 8)
-  );
+  ranges.forEach((range, index) => {
+    if (range.start.compareTo(lastPos) > 0) {
+      const gapText = document.getText(new vscode.Range(lastPos, range.start));
+      snippetText += escapeSnippetText(gapText);
+    }
 
-  await replaceAndSelect(textEditor, range, wrapped, condition);
+    const baseIndent = leadingIndent(document.lineAt(range.start.line).text);
+    const body = indentBody(document.getText(range), unit);
+    const tabIndex = index + 1;
+
+    snippetText += `${baseIndent}if (\${${tabIndex}:true}) {\n${escapeSnippetText(body)}\n${baseIndent}}`;
+    lastPos = range.end;
+  });
+
+  const spanRange = new vscode.Range(ranges[0].start, ranges[ranges.length - 1].end);
+  await textEditor.insertSnippet(new vscode.SnippetString(snippetText), spanRange);
 }

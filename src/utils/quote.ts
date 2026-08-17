@@ -4,6 +4,9 @@ export interface StringToken {
   start: number;
   end: number;
   quote: string;
+  isAttrQuote?: boolean;
+  isObjectKey?: boolean;
+  enclosingQuote?: string;
 }
 
 function looksLikeRegexStart(text: string, index: number): boolean {
@@ -11,49 +14,153 @@ function looksLikeRegexStart(text: string, index: number): boolean {
   while (j >= 0 && /\s/.test(text[j])) j--;
   if (j < 0) return true;
   const prevChar = text[j];
-  if (/[a-zA-Z0-9_$)\]]/.test(prevChar)) {
+
+  // 如果前面是字母、数字或右括号，通常是除法（如 a / 2, 1 / 2, (a) / 2）
+  if (/[a-zA-Z0-9_$)\]}]/.test(prevChar)) {
     let k = j;
     while (k >= 0 && /[a-zA-Z0-9_$]/.test(text[k])) k--;
     const word = text.slice(k + 1, j + 1);
-    const keywordsBeforeRegex = new Set([
-      'return',
-      'typeof',
-      'instanceof',
-      'in',
-      'of',
-      'new',
-      'delete',
-      'void',
-      'throw',
-      'case',
-      'do',
-      'else',
-      'yield',
-      'await',
-    ]);
-    return /[a-zA-Z_$]/.test(prevChar) && keywordsBeforeRegex.has(word);
+    // 但如果前面的单词是关键字，则是正则（如 return /a/, typeof /a/）
+    if (word) {
+      const keywordsBeforeRegex = new Set([
+        'return',
+        'typeof',
+        'instanceof',
+        'in',
+        'of',
+        'new',
+        'delete',
+        'void',
+        'throw',
+        'case',
+        'do',
+        'else',
+        'yield',
+        'await',
+      ]);
+      return keywordsBeforeRegex.has(word);
+    }
+    // 前面是 ) ] }，确认是除法
+    return false;
   }
+  // 如果前面是其他操作符（如 = ( , : ? + - * < > 等），则是正则
   return true;
+}
+
+function isObjectPropertyKey(text: string, start: number, end: number): boolean {
+  let k = end;
+  while (k < text.length && /\s/.test(text[k])) k++;
+  if (k >= text.length || text[k] !== ':' || text[k + 1] === ':') {
+    return false;
+  }
+
+  let j = start - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (j < 0) return false;
+
+  const prevChar = text[j];
+  return prevChar === '{' || prevChar === ',';
+}
+
+function getAttrNameBeforeEqual(text: string, quoteIndex: number): string | null {
+  let j = quoteIndex - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (j < 0 || text[j] !== '=') return null;
+  j--;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  const endName = j + 1;
+  while (j >= 0 && /[a-zA-Z0-9_.:\-#@]/.test(text[j])) j--;
+  const attrName = text.slice(j + 1, endName);
+
+  if (j >= 0 && (text[j] === '=' || text[j] === '!' || text[j] === '<' || text[j] === '>')) return null;
+  if (/^(const|let|var|return|case)$/.test(attrName)) return null;
+
+  return attrName.length > 0 ? attrName : null;
+}
+
+function isVueDynamicAttr(attrName: string): boolean {
+  return attrName.startsWith(':') || attrName.startsWith('@') || attrName.startsWith('v-') || attrName.startsWith('#');
+}
+
+export function getNextQuote(
+  currentQuote: string,
+  enclosingQuote?: string,
+  isAttrQuote?: boolean,
+  isObjectKey?: boolean
+): string {
+  if (isAttrQuote) {
+    return currentQuote === '"' ? "'" : '"';
+  }
+
+  let order: readonly string[] = QUOTE_ORDER;
+  if (isObjectKey) {
+    order = ["'", '"'];
+  }
+  if (enclosingQuote && (enclosingQuote === '"' || enclosingQuote === "'")) {
+    order = order.filter(q => q !== enclosingQuote);
+  }
+
+  if (order.length === 0) {
+    return currentQuote;
+  }
+
+  const currentIndex = order.indexOf(currentQuote as (typeof QUOTE_ORDER)[number]);
+  if (currentIndex === -1) return order[0];
+  return order[(currentIndex + 1) % order.length];
 }
 
 export function scanStringTokens(text: string): StringToken[] {
   const tokens: StringToken[] = [];
   let i = 0;
   const len = text.length;
-  type Mode = 'CODE' | 'STRING' | 'TEMPLATE';
+  let inTag = false;
+
+  type Mode = 'CODE' | 'STRING' | 'TEMPLATE' | 'VUE_ATTR';
   interface State {
     mode: Mode;
     quote?: string;
     start?: number;
     braceDepth?: number;
+    attrQuote?: string;
+    isAttrQuote?: boolean;
   }
   const stack: State[] = [{ mode: 'CODE' }];
+
+  function currentEnclosingQuote(): string | undefined {
+    for (let s = stack.length - 1; s >= 0; s--) {
+      if (stack[s].mode === 'VUE_ATTR') {
+        return stack[s].attrQuote;
+      }
+    }
+    return undefined;
+  }
 
   while (i < len) {
     const current = stack[stack.length - 1];
     const char = text[i];
     const next = text[i + 1];
-    if (current.mode === 'CODE') {
+
+    if (current.mode === 'CODE' || current.mode === 'VUE_ATTR') {
+      if (char === '<' && text.slice(i, i + 4) === '<!--') {
+        i += 4;
+        while (i < len && text.slice(i, i + 3) !== '-->') i++;
+        i += 3;
+        continue;
+      }
+      if (char === '<' && /[a-zA-Z/]/.test(next) && current.mode === 'CODE') {
+        let j = i - 1;
+        while (j >= 0 && /\s/.test(text[j])) j--;
+        const prevChar = j >= 0 ? text[j] : '';
+        // 排除前一个字符为合法标识符（如 Array<T>）或右括号（如 (a) < b）
+        // 真实标签前通常是空白、等号、大括号、标签闭合 > 或换行
+        if (!/[a-zA-Z0-9_$)\]]/.test(prevChar)) {
+          inTag = true;
+        }
+      }
+      if (char === '>' && inTag && current.mode === 'CODE') {
+        inTag = false;
+      }
+
       if (char === '/' && next === '/') {
         i += 2;
         while (i < len && text[i] !== '\n') i++;
@@ -94,8 +201,33 @@ export function scanStringTokens(text: string): StringToken[] {
         while (i < len && /[a-zA-Z]/.test(text[i])) i++;
         continue;
       }
+
+      if (current.mode === 'VUE_ATTR' && char === current.attrQuote && (current.braceDepth ?? 0) === 0) {
+        tokens.push({
+          start: current.start!,
+          end: i + 1,
+          quote: current.attrQuote!,
+          isAttrQuote: true,
+        });
+        stack.pop();
+        i++;
+        continue;
+      }
+
+      if (current.mode === 'CODE' && inTag && (char === '"' || char === "'")) {
+        const attrName = getAttrNameBeforeEqual(text, i);
+        if (attrName && isVueDynamicAttr(attrName)) {
+          stack.push({ mode: 'VUE_ATTR', attrQuote: char, braceDepth: 0, start: i });
+          i++;
+          continue;
+        }
+        stack.push({ mode: 'STRING', quote: char, start: i, isAttrQuote: true });
+        i++;
+        continue;
+      }
+
       if (char === "'" || char === '"') {
-        stack.push({ mode: 'STRING', quote: char, start: i });
+        stack.push({ mode: 'STRING', quote: char, start: i, isAttrQuote: false });
         i++;
         continue;
       }
@@ -111,12 +243,14 @@ export function scanStringTokens(text: string): StringToken[] {
       }
       if (char === '}') {
         if (current.braceDepth !== undefined) {
-          if (current.braceDepth === 0) {
+          if (current.braceDepth === 0 && current.mode === 'CODE') {
             stack.pop();
             i++;
             continue;
           }
-          current.braceDepth--;
+          if (current.braceDepth > 0) {
+            current.braceDepth--;
+          }
         }
         i++;
         continue;
@@ -128,7 +262,15 @@ export function scanStringTokens(text: string): StringToken[] {
         continue;
       }
       if (char === current.quote) {
-        tokens.push({ start: current.start!, end: i + 1, quote: current.quote! });
+        const isObjKey = isObjectPropertyKey(text, current.start!, i + 1);
+        tokens.push({
+          start: current.start!,
+          end: i + 1,
+          quote: current.quote!,
+          isAttrQuote: current.isAttrQuote,
+          isObjectKey: isObjKey,
+          enclosingQuote: currentEnclosingQuote(),
+        });
         stack.pop();
         i++;
         continue;
@@ -140,7 +282,15 @@ export function scanStringTokens(text: string): StringToken[] {
         continue;
       }
       if (char === '`') {
-        tokens.push({ start: current.start!, end: i + 1, quote: '`' });
+        const isObjKey = isObjectPropertyKey(text, current.start!, i + 1);
+        tokens.push({
+          start: current.start!,
+          end: i + 1,
+          quote: '`',
+          isAttrQuote: false,
+          isObjectKey: isObjKey,
+          enclosingQuote: currentEnclosingQuote(),
+        });
         stack.pop();
         i++;
         continue;
@@ -175,10 +325,50 @@ function splitTemplateSegments(rawText: string): { type: 'str' | 'expr'; value: 
       i += 2;
       let exprBuffer = '';
       let braceDepth = 1;
+      let inSubQuote: string | null = null;
+
       while (i < content.length && braceDepth > 0) {
-        if (content[i] === '{') braceDepth++;
-        else if (content[i] === '}') braceDepth--;
-        if (braceDepth > 0) exprBuffer += content[i];
+        const c = content[i];
+
+        // 新增：跳过单行注释
+        if (!inSubQuote && c === '/' && content[i + 1] === '/') {
+          exprBuffer += '//';
+          i += 2;
+          while (i < content.length && content[i] !== '\n') exprBuffer += content[i++];
+          continue;
+        }
+        // 新增：跳过块注释
+        if (!inSubQuote && c === '/' && content[i + 1] === '*') {
+          exprBuffer += '/*';
+          i += 2;
+          while (i < content.length && !(content[i] === '*' && content[i + 1] === '/')) exprBuffer += content[i++];
+          exprBuffer += '*/';
+          i += 2;
+          continue;
+        }
+
+        if (inSubQuote) {
+          if (c === '\\') {
+            exprBuffer += c + (content[i + 1] ?? '');
+            i += 2;
+            continue;
+          }
+          if (c === inSubQuote) inSubQuote = null;
+          exprBuffer += c;
+          i++;
+          continue;
+        }
+
+        if (c === '"' || c === "'" || c === '`') {
+          inSubQuote = c;
+          exprBuffer += c;
+          i++;
+          continue;
+        }
+
+        if (c === '{') braceDepth++;
+        else if (c === '}') braceDepth--;
+        if (braceDepth > 0) exprBuffer += c;
         i++;
       }
       segments.push({ type: 'expr', value: exprBuffer.trim() });
@@ -198,6 +388,11 @@ function escapeStringContent(content: string, fromQuote: string, toQuote: string
   let i = 0;
   while (i < content.length) {
     const char = content[i];
+    if (toQuote === '`' && char === '$' && content[i + 1] === '{' && fromQuote !== '`') {
+      result += '\\$';
+      i++;
+      continue;
+    }
     if (char === '\\') {
       const next = content[i + 1];
       if (next === fromQuote && next !== toQuote) {
@@ -207,6 +402,20 @@ function escapeStringContent(content: string, fromQuote: string, toQuote: string
       }
       i += 2;
       continue;
+    }
+    if (char === '\r' && content[i + 1] === '\n') {
+      if (toQuote !== '`') {
+        result += '\\n';
+        i += 2;
+        continue;
+      }
+    }
+    if (char === '\n') {
+      if (toQuote !== '`') {
+        result += '\\n';
+        i++;
+        continue;
+      }
     }
     if (char === toQuote) {
       result += '\\' + char;
@@ -219,11 +428,8 @@ function escapeStringContent(content: string, fromQuote: string, toQuote: string
   return result;
 }
 
-// 拼接链中的一个操作数：字符串/模板字面量（可带转义）、点号标识符路径或数字。
-// 限定操作数形态，避免把 `const x = 'a'` 这类赋值前缀误吞进链里。
 const CHAIN_TERM_SRC = String.raw`(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\`(?:[^\`\\]|\\.)*\`|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*|\d+(?:\.\d+)?)`;
 
-// 模块级常量避免每次调用重复编译；使用前手动重置 lastIndex，等效避免共享实例污染
 const CONCAT_CHAIN_REGEXP = new RegExp(`${CHAIN_TERM_SRC}(?:\\s*\\+\\s*${CHAIN_TERM_SRC})+`, 'g');
 
 export function findConcatenationChain(
@@ -249,7 +455,6 @@ export function findConcatenationChain(
 }
 
 export function convertConcatToTemplate(concatExpr: string): string {
-  // 用操作数正则提取项：字符串内/模板内的 + 不会被拆散（'a + b' + name → a + b${name}）
   const terms = concatExpr.match(new RegExp(CHAIN_TERM_SRC, 'g')) ?? [];
   let result = '`';
   for (const term of terms) {
@@ -272,11 +477,10 @@ export function transformQuotes(rawText: string, fromQuote: string, toQuote: str
     if (hasExpressions) {
       const parts = segments.map(seg => {
         if (seg.type === 'expr') {
-          if (
-            (seg.value.startsWith("'") && seg.value.endsWith("'")) ||
-            (seg.value.startsWith('"') && seg.value.endsWith('"'))
-          ) {
-            const innerQuote = seg.value[0];
+          // 使用精确词法扫描，验证是否为单一字符串字面量
+          const innerTokens = scanStringTokens(seg.value);
+          if (innerTokens.length === 1 && innerTokens[0].start === 0 && innerTokens[0].end === seg.value.length) {
+            const innerQuote = innerTokens[0].quote;
             const innerContent = seg.value.slice(1, -1);
             return `${toQuote}${escapeStringContent(innerContent, innerQuote, toQuote)}${toQuote}`;
           }
@@ -289,4 +493,35 @@ export function transformQuotes(rawText: string, fromQuote: string, toQuote: str
   }
   const content = rawText.slice(1, -1);
   return `${toQuote}${escapeStringContent(content, fromQuote, toQuote)}${toQuote}`;
+}
+
+export function transformAttrQuotes(rawText: string, fromQuote: string, toQuote: string): string {
+  const content = rawText.slice(1, -1);
+  const innerTokens = scanStringTokens(content);
+  if (innerTokens.length === 0) {
+    let newContent = content;
+    if (toQuote === "'") {
+      newContent = newContent.replace(/&quot;/g, '"').replace(/'/g, '&#39;');
+    } else if (toQuote === '"') {
+      newContent = newContent.replace(/(&#39;|&apos;)/g, "'").replace(/"/g, '&quot;');
+    }
+    return `${toQuote}${newContent}${toQuote}`;
+  }
+
+  let newContent = '';
+  let lastIndex = 0;
+
+  for (const token of innerTokens) {
+    newContent += content.slice(lastIndex, token.start);
+    const tokenRaw = content.slice(token.start, token.end);
+    if (token.quote === toQuote) {
+      newContent += transformQuotes(tokenRaw, toQuote, fromQuote);
+    } else {
+      newContent += tokenRaw;
+    }
+    lastIndex = token.end;
+  }
+  newContent += content.slice(lastIndex);
+
+  return `${toQuote}${newContent}${toQuote}`;
 }

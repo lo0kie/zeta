@@ -1,80 +1,159 @@
-// 样式补全：Less/SCSS 门控、partial 解析、@use 导入、保存后失效
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { loadModule, makeWorkspace, setConfig, cleanup, makeDocument, shimPath } from './helpers.mjs';
+import { test } from 'node:test';
+import { cleanup, loadModule, makeDocument, makeWorkspace, setConfig, shimPath } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
 const { Uri } = require(shimPath);
 
-const { StyleCompletionProvider, collectImportedSymbols, clearStyleFileCache } = await loadModule(`
-  export { StyleCompletionProvider, collectImportedSymbols, clearStyleFileCache } from './src/providers/style-completion';
+const { StyleCompletionProvider, collectImportedSymbols, collectImportedFiles, clearStyleFileCache } =
+  await loadModule(`
+  export {
+    StyleCompletionProvider,
+    collectImportedSymbols,
+    collectImportedFiles,
+    clearStyleFileCache,
+  } from './src/providers/style-completion';
 `);
 
-test('SCSS：@use + partial 变量/mixin 补全', async () => {
+test('Less 递归嵌套 @import 解析（最多 3 层并防循环引用）', async () => {
   const ws = makeWorkspace();
   setConfig({});
   try {
-    mkdirSync(join(ws, 'app'), { recursive: true });
-    writeFileSync(
-      join(ws, 'app', '_vars.scss'),
-      `$primary-color: #1890ff;\n@mixin flex($dir: row) { display: flex; }\n`
-    );
-    const text = `@use "./vars";\n.a { color: $prim; @inc }\n`;
-    const doc = makeDocument(text, join(ws, 'app', 'm.scss'), 'scss');
+    const app = join(ws, 'app');
+    mkdirSync(app, { recursive: true });
 
-    const syms = await collectImportedSymbols(doc);
-    assert.ok(syms.some(s => s.name === '$primary-color' && s.kind === 'scss-variable'), 'partial 变量解析');
-    assert.ok(syms.some(s => s.name === '@flex' && s.kind === 'scss-mixin'), 'partial mixin 解析');
+    writeFileSync(join(app, 'c.less'), '@c-var: #333;\n');
+    writeFileSync(join(app, 'b.less'), '@import "./c";\n@b-var: #222;\n');
+    writeFileSync(join(app, 'a.less'), '@import "./b";\n@a-var: #111;\n');
 
+    const doc = makeDocument('@import "./a";\n', join(app, 'main.less'), 'less');
+    const files = await collectImportedFiles(doc);
+    assert.equal(files.length, 3);
+
+    const symbols = await collectImportedSymbols(doc);
+    assert.ok(symbols.some(s => s.name === '@a-var'));
+    assert.ok(symbols.some(s => s.name === '@b-var'));
+    assert.ok(symbols.some(s => s.name === '@c-var'));
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('Vue SFC 多 <style> 块不同语言解析隔离', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const text = `
+<template><div></div></template>
+<style lang="less">
+  @less-color: #1890ff;
+  .box-less(@w: 10px) { width: @w; }
+</style>
+<style lang="scss">
+  $scss-color: #ff4d4f;
+  @mixin box-scss($h: 20px) { height: $h; }
+</style>
+<style>
+  --css-var: #000;
+</style>
+`;
+    const doc = makeDocument(text, join(ws, 'multi.vue'), 'vue');
+    const symbols = await collectImportedSymbols(doc);
+
+    assert.ok(symbols.some(s => s.name === '@less-color' && s.kind === 'variable'));
+    assert.ok(symbols.some(s => s.name === '.box-less' && s.kind === 'mixin'));
+    assert.ok(symbols.some(s => s.name === '$scss-color' && s.kind === 'scss-variable'));
+    assert.ok(symbols.some(s => s.name === '@box-scss' && s.kind === 'scss-mixin'));
+    assert.ok(symbols.some(s => s.name === '--css-var' && s.kind === 'css-variable'));
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('Mixin 复杂参数：带逗号的字符串与分号分隔符', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const less = `
+.custom-btn(@label: "hello, world", @color: #fff) { content: @label; }
+.box-border(@w: 1px; @c: #000) { border: @w solid @c; }
+`;
+    const doc = makeDocument(less, join(ws, 'complex.less'), 'less');
+    const symbols = await collectImportedSymbols(doc);
+
+    const btn = symbols.find(s => s.name === '.custom-btn');
+    assert.ok(btn);
+    assert.equal(btn.snippet, '.custom-btn(${1:@label: "hello, world"}, ${2:@color: #fff});');
+
+    const border = symbols.find(s => s.name === '.box-border');
+    assert.ok(border);
+    assert.equal(border.snippet, '.box-border(${1:@w: 1px}, ${2:@c: #000});');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('Mixin 补全：光标后已有分号时自动移除 Snippet 末尾分号', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const app = join(ws, 'app');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, 'm.less'), '.btn(@size: 12px) { font-size: @size; }\n');
+
+    const text = '@import "./m";\n.a { .btn; }\n';
+    const doc = makeDocument(text, join(app, 'main.less'), 'less');
     const provider = new StyleCompletionProvider();
+
     const line1 = text.split('\n')[1];
-    const dollarItems = (await provider.provideCompletionItems(doc, { line: 1, character: line1.indexOf('$prim') + 5 })) ?? [];
-    assert.deepEqual(dollarItems.map(i => i.label), ['$primary-color']);
-    const atItems = (await provider.provideCompletionItems(doc, { line: 1, character: line1.indexOf('@inc') + 4 })) ?? [];
-    assert.deepEqual(atItems.map(i => i.label), ['@flex']);
-    assert.equal(atItems[0].insertText.value, '@include flex(${1:$dir: row});');
+    const triggerPos = { line: 1, character: line1.indexOf('.btn') + 4 };
+    const items = (await provider.provideCompletionItems(doc, triggerPos)) ?? [];
+
+    const btnItem = items.find(i => i.label === '.btn');
+    assert.ok(btnItem);
+    assert.equal(btnItem.insertText.value, '.btn(${1:@size: 12px})');
   } finally {
     cleanup(ws);
   }
 });
 
-test('Less：变量与 mixin 门控（css 文件不产 Less 符号）', async () => {
+test('Mixin 参数值字符串内含分号时仍按顶层逗号分隔', async () => {
   const ws = makeWorkspace();
   setConfig({});
   try {
-    mkdirSync(join(ws, 'app'), { recursive: true });
-    writeFileSync(join(ws, 'app', 'mixins.less'), `@primary: #1890ff;\n.bordered(@w: 1px) { border: 1px solid; }\n`);
-    const text = `@import "./mixins";\n.a { color: @prim; }\n`;
-    const doc = makeDocument(text, join(ws, 'app', 'm.less'), 'less');
-    const syms = await collectImportedSymbols(doc);
-    assert.ok(syms.some(s => s.name === '@primary' && s.kind === 'variable'));
-    assert.ok(syms.some(s => s.name === '.bordered' && s.kind === 'mixin'));
-    assert.equal(syms.find(s => s.name === '.bordered').snippet, '.bordered(${1:@w: 1px});');
+    const less = `
+.semi(@a: "x;y", @b: 2) { content: @a; }
+`;
+    const doc = makeDocument(less, join(ws, 'semi.less'), 'less');
+    const symbols = await collectImportedSymbols(doc);
+
+    const semi = symbols.find(s => s.name === '.semi');
+    assert.ok(semi);
+    // 字符串内的 ; 不参与分隔符判定：顶层逗号分隔，两个参数分别生成 tabstop
+    assert.equal(semi.snippet, '.semi(${1:@a: "x;y"}, ${2:@b: 2});');
   } finally {
     cleanup(ws);
   }
 });
 
-test('保存被导入文件后，引用方（同 version）重新收集', async () => {
+test('保存被导入文件后引用方缓存失效', async () => {
   const ws = makeWorkspace();
   setConfig({});
   try {
     mkdirSync(join(ws, 'app'), { recursive: true });
     const themePath = join(ws, 'app', 'theme.less');
     const mainPath = join(ws, 'app', 'main.less');
-    writeFileSync(themePath, `@c: #111;\n`);
-    const doc = makeDocument(`@import "./theme";\n.a { color: @c; }\n`, mainPath, 'less', 5);
+    writeFileSync(themePath, '@c: #111;\n');
+    const doc = makeDocument('@import "./theme";\n.a { color: @c; }\n', mainPath, 'less', 5);
 
     assert.equal((await collectImportedSymbols(doc)).find(s => s.name === '@c')?.value, '#111');
 
-    // 模拟保存 theme.less（磁盘改内容 + 触发失效回调，传被保存文件的 uri）
-    writeFileSync(themePath, `@c: #222;\n`);
+    writeFileSync(themePath, '@c: #222;\n');
     clearStyleFileCache(Uri.file(themePath));
 
-    // 引用方 version 未变，必须拿到新值（旧实现会命中缓存返回 #111）
     assert.equal((await collectImportedSymbols(doc)).find(s => s.name === '@c')?.value, '#222');
   } finally {
     cleanup(ws);

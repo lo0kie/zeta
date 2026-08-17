@@ -1,13 +1,11 @@
 {
-  "name": "zeta",
+  "name": "lookie-zeta",
   "displayName": "zeta",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "icon": "./public/icon.png",
   "description": "一体化开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全、颜色编辑、脚本运行。零运行时依赖、无遥测。",
   "categories": [
-    "Other",
-    "Snippets",
-    "Formatters"
+    "Other"
   ],
   "keywords": [
     "path completion",
@@ -26,8 +24,8 @@
   ],
   "repository": "https://github.com/lo0kie/zeta",
   "license": "MIT",
-  "author": "lo0kie",
-  "publisher": "lo0kie",
+  "author": "lookie",
+  "publisher": "lookie",
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsup src/index.ts --watch --external vscode",
@@ -189,20 +187,19 @@
         },
         "zeta.list.folders": {
           "type": "array",
-          "description": "explorer需要检索的目录",
           "items": {
-            "type": "string",
-            "uniqueItems": true
+            "type": "string"
           },
+          "uniqueItems": true,
           "default": []
         },
         "zeta.list.filterFolders": {
           "type": "array",
           "description": "explorer中过滤的关键字",
           "items": {
-            "type": "string",
-            "uniqueItems": true
+            "type": "string"
           },
+          "uniqueItems": true,
           "default": [
             "node_modules",
             ".vscode",
@@ -407,7 +404,45 @@
           "icon": "$(root-folder)"
         }
       ]
-    }
+    },
+    "semanticTokenScopes": [
+      {
+        "language": "css",
+        "scopes": {
+          "variable": [
+            "variable.other.readwrite.js",
+            "variable"
+          ]
+        }
+      },
+      {
+        "language": "less",
+        "scopes": {
+          "variable": [
+            "variable.other.readwrite.js",
+            "variable"
+          ]
+        }
+      },
+      {
+        "language": "scss",
+        "scopes": {
+          "variable": [
+            "variable.other.readwrite.js",
+            "variable"
+          ]
+        }
+      },
+      {
+        "language": "vue",
+        "scopes": {
+          "variable": [
+            "variable.other.readwrite.js",
+            "variable"
+          ]
+        }
+      }
+    ]
   },
   "activationEvents": [
     "onStartupFinished"

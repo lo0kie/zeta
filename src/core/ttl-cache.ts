@@ -12,6 +12,7 @@ export class TtlCache<V> {
     private readonly _maxSize = 500
   ) {}
 
+  /** 读取条目：未命中或已过期返回 undefined（过期的条目同时被清除） */
   get(key: string): V | undefined {
     const entry = this._map.get(key);
     if (!entry) return undefined;
@@ -33,11 +34,12 @@ export class TtlCache<V> {
     return true;
   }
 
+  /** 写入条目并刷新时间戳；超过容量先清过期项，仍超则按 FIFO 淘汰最旧（Map 保插入序） */
   set(key: string, value: V): void {
+    this._map.delete(key);
     this._map.set(key, { value, time: Date.now() });
     if (this._map.size > this._maxSize) {
       this.cleanup();
-      // 仍超容量时按 FIFO 淘汰最旧条目（Map 保插入序），保证硬上限
       while (this._map.size > this._maxSize) {
         const oldest = this._map.keys().next().value;
         if (oldest === undefined) break;
