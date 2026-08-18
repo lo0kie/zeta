@@ -1,4 +1,4 @@
-﻿import Editor from '@/core/editor';
+import Editor from '@/core/editor';
 import { mergeOverlappingRanges } from '@/utils/edits';
 import { findAllTagPairs, findTagPairAt } from '@/utils/tag';
 import * as vscode from 'vscode';

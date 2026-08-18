@@ -3,6 +3,10 @@ import { wordTransformers } from '@/utils/case';
 import * as vscode from 'vscode';
 import { applyTransformerToSelections, buildCustomTransformers } from './change-case';
 
+/**
+ * 循环切换单词格式：按 zeta.case.cycleOrder 顺序在格式间前进。
+ * 跳过不会产生变化的格式（单字符/纯数字等），一圈无变化则放弃。
+ */
 export default async function cycleCase(textEditor: vscode.TextEditor, _edit: vscode.TextEditorEdit): Promise<void> {
   const { selections, document } = textEditor;
   if (selections.length === 0) return;

@@ -1,3 +1,6 @@
+/**
+ * 查找脚本运行：定位 package.json，探测包管理器，在终端执行所选脚本（可选询问追加参数）。
+ */
 import { Configuration } from '@/core/configuration';
 import { basename, dirname, findRootUri, isFile, isSameUri, resolveUriArgument } from '@/core/fs';
 import { toNormalizePath } from '@/core/strings';

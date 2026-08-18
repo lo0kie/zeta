@@ -8,13 +8,19 @@ import { cleanup, loadModule, makeDocument, makeWorkspace, setConfig, shimPath }
 const require = createRequire(import.meta.url);
 const { Uri } = require(shimPath);
 
-const { StyleCompletionProvider, collectImportedSymbols, collectImportedFiles, clearStyleFileCache } =
-  await loadModule(`
+const {
+  StyleCompletionProvider,
+  collectImportedSymbols,
+  collectImportedFiles,
+  clearStyleFileCache,
+  getStyleBlocks,
+} = await loadModule(`
   export {
     StyleCompletionProvider,
     collectImportedSymbols,
     collectImportedFiles,
     clearStyleFileCache,
+    getStyleBlocks,
   } from './src/providers/style-completion';
 `);
 
@@ -68,6 +74,30 @@ test('Vue SFC 多 <style> 块不同语言解析隔离', async () => {
     assert.ok(symbols.some(s => s.name === '$scss-color' && s.kind === 'scss-variable'));
     assert.ok(symbols.some(s => s.name === '@box-scss' && s.kind === 'scss-mixin'));
     assert.ok(symbols.some(s => s.name === '--css-var' && s.kind === 'css-variable'));
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('Vue 模板 HTML 注释里的 <style> 不被当作样式块', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    // 注释里写 <style>...</style> 是「临时禁用样式块」的常见做法，不应被解析为真实块
+    const text = `<template>
+<!-- <style>.disabled { color: red; }</style> -->
+</template>
+<style lang="less">
+@c: #1890ff;
+</style>
+`;
+    const doc = makeDocument(text, join(ws, 'commented.vue'), 'vue');
+    const blocks = getStyleBlocks(doc);
+
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].lang, 'less');
+    assert.ok(blocks[0].content.includes('@c'));
+    assert.ok(!blocks[0].content.includes('.disabled'));
   } finally {
     cleanup(ws);
   }
@@ -155,6 +185,37 @@ test('保存被导入文件后引用方缓存失效', async () => {
     clearStyleFileCache(Uri.file(themePath));
 
     assert.equal((await collectImportedSymbols(doc)).find(s => s.name === '@c')?.value, '#222');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('保存三级依赖链最底层文件后，全部引用方缓存失效（B 导 A、C 导 B 场景）', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const app = join(ws, 'app');
+    mkdirSync(app, { recursive: true });
+
+    // main → a → b → c 三级依赖链
+    const cPath = join(app, 'c.less');
+    const bPath = join(app, 'b.less');
+    const aPath = join(app, 'a.less');
+    const mainPath = join(app, 'main.less');
+    writeFileSync(cPath, '@c-var: #333;\n');
+    writeFileSync(bPath, '@import "./c";\n@b-var: #222;\n');
+    writeFileSync(aPath, '@import "./b";\n@a-var: #111;\n');
+    const doc = makeDocument('@import "./a";\n', mainPath, 'less', 5);
+
+    // 首轮解析：main 的缓存里合入了 @c-var 的旧值
+    assert.equal((await collectImportedSymbols(doc)).find(s => s.name === '@c-var')?.value, '#333');
+
+    // 修改最底层 c.less 并保存
+    writeFileSync(cPath, '@c-var: #444;\n');
+    clearStyleFileCache(Uri.file(cPath));
+
+    // 若传递依赖失效未生效，main 的缓存会返回旧值 #333
+    assert.equal((await collectImportedSymbols(doc)).find(s => s.name === '@c-var')?.value, '#444');
   } finally {
     cleanup(ws);
   }

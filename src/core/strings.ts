@@ -1,3 +1,6 @@
+/**
+ * 字符串小工具：escapeRegExp 等。
+ */
 import { normalize } from 'node:path';
 import * as vscode from 'vscode';
 

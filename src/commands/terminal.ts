@@ -1,3 +1,6 @@
+/**
+ * 终端相关命令：在终端中运行（runInTerminal，供资源导航/脚本使用）与状态栏终端切换（toggleTerminal）。
+ */
 import { dirname, isFile } from '@/core/fs';
 import * as vscode from 'vscode';
 
@@ -15,6 +18,9 @@ export interface RunInTerminalOptions {
   disposeSame?: boolean;
 }
 
+/** 由本扩展创建并登记的终端：按创建时名称追踪实例引用，用户在终端内重命名后仍可精确销毁 */
+const managedTerminals = new Map<string, vscode.Terminal>();
+
 /** 在指定目录创建终端并依次发送命令；cwd 指向文件时自动取其所在目录 */
 export async function runInTerminal({
   cwd,
@@ -29,13 +35,24 @@ export async function runInTerminal({
   }
 
   if (disposeSame && name) {
-    // 同名终端可能有多个（用户多次触发或重命名后残留），全部销毁
+    // 1. 精确销毁：Map 里登记过的同名实例（含用户重命名后 name 已变化的那个）
+    const existing = managedTerminals.get(name);
+    if (existing && vscode.window.terminals.includes(existing)) {
+      existing.dispose();
+    }
+    managedTerminals.delete(name);
+
+    // 2. 兜底：仍有同名终端（非本扩展创建或历史残留）时按 name 全部销毁
     for (const terminal of vscode.window.terminals) {
       if (terminal.name === name) terminal.dispose();
     }
   }
 
   const terminal = vscode.window.createTerminal({ cwd: workingDir, name });
+  if (name) {
+    managedTerminals.set(name, terminal);
+  }
+
   if (show) terminal.show();
 
   for (const command of commands) {

@@ -1,4 +1,7 @@
-﻿import { escapeRegExp } from '@/core/strings';
+/**
+ * HTML/JSX 标签配对扫描：自闭合/void 元素/注释/script-style 块感知。
+ */
+import { escapeRegExp } from '@/core/strings';
 import * as vscode from 'vscode';
 
 export interface MatchedTagPair {

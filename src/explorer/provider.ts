@@ -5,24 +5,31 @@ import { TtlCache } from '@/core/ttl-cache';
 import { appendConfiguredFolders } from '@/explorer/folders';
 import * as vscode from 'vscode';
 
+/** 资源导航树的节点：目录/文件，或占位提示节点 */
 export interface IExplorerNode {
   uri: vscode.Uri;
   type: vscode.FileType;
   isPlaceholder?: boolean;
 }
 
+/** 未配置任何检索目录时的占位节点（点击引导添加） */
 const PLACEHOLDER_NODE: IExplorerNode = {
   uri: vscode.Uri.file(''),
   type: vscode.FileType.Unknown,
   isPlaceholder: true,
 };
 
+/**
+ * 资源导航树：展示 zeta.list.folders 配置的目录（支持拖拽添加、目录/文件展开打开）。
+ * 子节点按目录优先排序，读盘结果带 2s TTL 缓存。
+ */
 export class ExplorerTreeViewProvider
   implements vscode.TreeDataProvider<IExplorerNode>, vscode.TreeDragAndDropController<IExplorerNode>
 {
   private _onDidChangeTreeData = new vscode.EventEmitter<IExplorerNode | void>();
   public readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  // 只接受外部拖入（text/uri-list），自身不可拖出
   public dropMimeTypes = ['text/uri-list'];
   public dragMimeTypes: string[] = [];
 
@@ -33,6 +40,7 @@ export class ExplorerTreeViewProvider
   private static readonly CHILD_CACHE_TTL_MS = 2000;
   private _childCache = new TtlCache<IExplorerNode[]>(ExplorerTreeViewProvider.CHILD_CACHE_TTL_MS);
 
+  /** 清空全部缓存（配置变更时调用），下次展开重新读盘 */
   public invalidateCaches(): void {
     this._filterRegExp = null;
     this._baseFolders = null;
@@ -40,6 +48,7 @@ export class ExplorerTreeViewProvider
     this._childCache.clear();
   }
 
+  /** 视图刷新：清子节点缓存；可见时同时触发树重绘 */
   public refresh(visible = true): void {
     this._childCache.clear();
     if (visible) this._onDidChangeTreeData.fire();
@@ -47,17 +56,19 @@ export class ExplorerTreeViewProvider
 
   public handleDrag(): void {}
 
+  /** 接受系统/工作区拖入的目录，过滤出目录后写入配置（isDirectory 并发校验，避免串行 stat 卡顿） */
   public async handleDrop(_target: IExplorerNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
     const uriList = await dataTransfer.get('text/uri-list')?.asString();
     if (!uriList) return;
 
-    const directories: vscode.Uri[] = [];
-    for (const uri of parseUriList(uriList)) {
-      if (await isDirectory(uri)) directories.push(uri);
-    }
+    const uris = parseUriList(uriList);
+    const checkResults = await Promise.all(uris.map(async uri => ({ uri, isDir: await isDirectory(uri) })));
+    const directories = checkResults.filter(r => r.isDir).map(r => r.uri);
+
     await appendConfiguredFolders(directories);
   }
 
+  /** 按 zeta.list.filterFolders 编译「目录名精确匹配」过滤正则（惰性构建） */
   private get filterRegExp(): RegExp {
     if (!this._filterRegExp) {
       const filterFolders = Configuration.FILTER_FOLDERS.filter(f => typeof f === 'string' && f.trim().length > 0);
@@ -67,6 +78,7 @@ export class ExplorerTreeViewProvider
     return this._filterRegExp;
   }
 
+  /** 解析配置的根目录：逐项探测必须是真实目录；全部无效或无配置时返回占位节点 */
   private async resolveBaseFolders(): Promise<IExplorerNode[]> {
     const configuredFolders = Configuration.FOLDERS.filter(folder => folder.trim().length > 0);
     if (configuredFolders.length === 0) return [PLACEHOLDER_NODE];
@@ -104,9 +116,10 @@ export class ExplorerTreeViewProvider
     const isRoot = this._baseFolderPaths.has(uri.fsPath);
 
     const treeItem = new vscode.TreeItem(nodeName, Collapsed);
-    treeItem.resourceUri = uri;
+    treeItem.resourceUri = uri.with({ scheme: 'zeta-file' });
 
     if (isRoot) {
+      // 根目录默认展开，副标题显示父目录名便于区分同名目录
       treeItem.collapsibleState = Expanded;
       treeItem.description = basename(dirname(uri));
     } else if (type === File) {
@@ -114,6 +127,7 @@ export class ExplorerTreeViewProvider
       treeItem.collapsibleState = None;
     }
 
+    // contextValue 供右键菜单的 when 匹配：根目录带 directory-root- 前缀
     const contextValueMap: Record<number, string> = {
       [Directory]: 'directory',
       [File]: 'file',
@@ -124,10 +138,12 @@ export class ExplorerTreeViewProvider
     return treeItem;
   }
 
+  /** 取子节点：根 = 配置目录列表；目录 = 读盘（过滤黑名单、目录优先、命中缓存） */
   public async getChildren(element?: IExplorerNode): Promise<IExplorerNode[]> {
     if (element?.isPlaceholder) return [];
 
     if (!element) {
+      // 根层只解析一次，配置变更时经 invalidateCaches 失效
       if (!this._baseFolders) {
         this._baseFolders = await this.resolveBaseFolders();
         this._baseFolderPaths = new Set(this._baseFolders.map(node => node.uri.fsPath));
@@ -146,6 +162,7 @@ export class ExplorerTreeViewProvider
       const files: IExplorerNode[] = [];
 
       for (const [dirname, fileType] of entries) {
+        // 过滤黑名单目录与非常规文件类型
         if (this.filterRegExp.test(dirname) || (fileType !== File && fileType !== Directory)) {
           continue;
         }
@@ -161,6 +178,7 @@ export class ExplorerTreeViewProvider
       this._childCache.set(cacheKey, children);
       return children;
     } catch {
+      // 目录不可读（权限/已删除）时静默返回空
       return [];
     }
   }

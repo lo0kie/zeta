@@ -1,6 +1,7 @@
 import { indentUnit, leadingIndent } from '@/utils/edits';
 import * as vscode from 'vscode';
 
+/** 把选区扩展到整行：起点取行首，终点若恰好在下行行首则钳回上一行行尾 */
 function expandToFullLines(document: vscode.TextDocument, range: vscode.Range): vscode.Range {
   const startLine = document.lineAt(range.start.line);
   // 如果选区刚好结束于下一行的行首，将其钳制回上一行
@@ -10,6 +11,7 @@ function expandToFullLines(document: vscode.TextDocument, range: vscode.Range): 
   return new vscode.Range(startLine.range.start, endLine.range.end);
 }
 
+/** 给每行（空行除外）加统一缩进；行尾按原文的 \r\n / \n 保持，避免 CRLF 文件被改写 */
 function indentBody(text: string, unit: string): string {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   return text
@@ -23,6 +25,10 @@ function escapeSnippetText(text: string): string {
   return text.replace(/[$}\\]/g, '\\$&');
 }
 
+/**
+ * 收集要包裹的选区：非空选区直接用；空选区取整行；存在非空选区时空光标跳过。
+ * 按起点排序并合并重叠区间（多光标跨行时避免重复包裹同一段）。
+ */
 function getTargetRanges(textEditor: vscode.TextEditor, expandFull: boolean): vscode.Range[] {
   const { selections, document } = textEditor;
   const rawRanges: vscode.Range[] = [];
@@ -64,6 +70,10 @@ function getTargetRanges(textEditor: vscode.TextEditor, expandFull: boolean): vs
   return merged;
 }
 
+/**
+ * 包裹 console.log：每个选区生成 `console.log(<内容>$N)`，N 为 Tabstop 序号（多选区连续 Tab 导航）。
+ * 选区文本去掉首尾空白与多余分号，光标落在右括号前。
+ */
 export async function wrapWithConsole(textEditor: vscode.TextEditor): Promise<void> {
   const { document } = textEditor;
   const ranges = getTargetRanges(textEditor, false);
@@ -91,6 +101,10 @@ export async function wrapWithConsole(textEditor: vscode.TextEditor): Promise<vo
   await textEditor.insertSnippet(new vscode.SnippetString(snippetText), spanRange);
 }
 
+/**
+ * 包裹 try/catch：整行展开，body 统一缩进一级；Tabstop 依次为 error 名、body 内容。
+ * 保持原文行尾（CRLF 安全）。
+ */
 export async function wrapWithTryCatch(textEditor: vscode.TextEditor): Promise<void> {
   const { document, options } = textEditor;
   const ranges = getTargetRanges(textEditor, true);
@@ -119,6 +133,9 @@ export async function wrapWithTryCatch(textEditor: vscode.TextEditor): Promise<v
   await textEditor.insertSnippet(new vscode.SnippetString(snippetText), spanRange);
 }
 
+/**
+ * 包裹 if：整行展开，body 统一缩进；Tabstop 依次为条件（默认 true）、body 内容。
+ */
 export async function wrapWithIf(textEditor: vscode.TextEditor): Promise<void> {
   const { document, options } = textEditor;
   const ranges = getTargetRanges(textEditor, true);

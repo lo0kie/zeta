@@ -1,4 +1,7 @@
-﻿import * as vscode from 'vscode';
+/**
+ * 编辑纯函数工具：区间合并、缩进推断、最终文本构建、偏移重映射、偏移转行列。
+ */
+import * as vscode from 'vscode';
 
 /** 一次文本编辑：start/end 为原文偏移（insert 时 end === start） */
 export interface TextEdit {
@@ -80,18 +83,20 @@ export function remapOffset(offset: number, edits: TextEdit[]): number {
   return result;
 }
 
-/** 把最终文本偏移换算成 Position（text 为 buildFinalText 的产物） */
+/** 把最终文本偏移换算成 Position（text 为 buildFinalText 的产物）；越界钳制，用原生 indexOf 跳跃数换行 */
 export function positionAt(text: string, offset: number): vscode.Position {
+  const validOffset = Math.max(0, Math.min(offset, text.length));
+  const textBefore = text.slice(0, validOffset);
+
   let line = 0;
-  let character = 0;
-  const end = Math.max(0, Math.min(offset, text.length));
-  for (let i = 0; i < end; i++) {
-    if (text[i] === '\n') {
-      line++;
-      character = 0;
-    } else {
-      character++;
-    }
+  let lastNewLineIndex = -1;
+
+  while (true) {
+    const nextIndex = textBefore.indexOf('\n', lastNewLineIndex + 1);
+    if (nextIndex === -1) break;
+    line++;
+    lastNewLineIndex = nextIndex;
   }
-  return new vscode.Position(line, character);
+
+  return new vscode.Position(line, validOffset - lastNewLineIndex - 1);
 }

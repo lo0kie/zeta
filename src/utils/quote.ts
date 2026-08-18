@@ -1,3 +1,6 @@
+/**
+ * 引号相关纯函数：字符串 token 扫描（注释/正则/模板感知）、引号三态循环、拼接链转模板字符串、属性引号处理。
+ */
 export const QUOTE_ORDER = ["'", '"', '`'] as const;
 
 export interface StringToken {
@@ -9,6 +12,17 @@ export interface StringToken {
   enclosingQuote?: string;
 }
 
+/**
+ * 启发式判断 text[index] 处的 / 是否开启正则字面量（而非除法）。
+ *
+ * 原理：回看 / 前一个有效字符——前是字母/数字/右括号多为除法，前是操作符
+ * 或行首多为正则；唯一例外是 return、typeof 等关键字（关键字后是正则）。
+ *
+ * 已知限制（人工构造的关键字表兜底，无法穷举）：
+ * - TSX 泛型 `<T>` 后紧跟 `/`、复杂三元表达式里的 `/` 等场景可能误判；
+ * - 误判只会影响 scanStringTokens 之后的字符串 token 提取（引号循环/颜色装饰
+ *   可能跳过一段），不改变文本内容，属可接受的已知偏差。
+ */
 function looksLikeRegexStart(text: string, index: number): boolean {
   let j = index - 1;
   while (j >= 0 && /\s/.test(text[j])) j--;
@@ -257,6 +271,8 @@ export function scanStringTokens(text: string): StringToken[] {
       }
       i++;
     } else if (current.mode === 'STRING') {
+      // 转义判定走「边扫边跳过」（\ 直接跳 2 字符）；与 style-completion.ts 的 isEscapedAt
+      // （向前数连续反斜杠判断是否转义）是同一问题的两种等价实现，行为应保持一致，改动需同步验证
       if (char === '\\') {
         i += 2;
         continue;

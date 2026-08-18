@@ -1,3 +1,7 @@
+/**
+ * 批量编辑封装：把多次 insert / replace 收集到一次 WorkspaceEdit，最后统一 apply；
+ * 短数组访问回退空串，避免越界崩溃。
+ */
 import * as vscode from 'vscode';
 
 /**

@@ -9,6 +9,7 @@ import cycleQuotes from './cycle-quotes';
 import { openFolder, openInDefaultBrowser } from './folder';
 import removeFolder from './remove-folder';
 import runScript from './run-script';
+import { debugResolveImport, openResolvedImport } from './style-import';
 import tagsWrap from './tags-wrap';
 import { runInTerminal, toggleTerminal } from './terminal';
 import unwrapTags from './unwrap-tags';
@@ -30,7 +31,9 @@ export function registerCommands({ explorerProvider }: CommandDeps): vscode.Disp
     registerTextEditorCommand('zeta.editor.wrapIf', wrapWithIf),
     registerTextEditorCommand('zeta.editor.unwrapTags', unwrapTags),
     registerTextEditorCommand('zeta.editor.cycleQuotes', cycleQuotes),
+    registerTextEditorCommand('zeta.editor.debugResolveImport', debugResolveImport),
 
+    registerCommand('zeta.openResolvedImport', (uriString: string) => openResolvedImport(uriString)),
     registerCommand('zeta.folder.openInTerminal', arg => runInTerminal({ cwd: resolveUriArgument(arg) })),
     registerCommand('zeta.file.openInBrowser', openInDefaultBrowser),
     registerCommand('zeta.folder.openInWindow', arg => openFolder(arg, false)),

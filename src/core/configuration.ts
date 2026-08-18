@@ -1,3 +1,6 @@
+/**
+ * 配置读取封装：zeta.* 配置的类型化访问，带默认值与惰性读取。
+ */
 import * as vscode from 'vscode';
 
 type CustomTransformStep = { pattern: string; replacement: string; flags?: string };
@@ -8,7 +11,11 @@ type ConfigTypeMap = {
   explorer: boolean;
   filterFolders: string[];
   folders: string[];
+  pathExtensions: string[];
+  pathMaxEntries: number;
+  pathShowHidden: boolean;
   runScriptAskArguments: boolean;
+  styleMaxImportDepth: number;
   tag: string;
   terminal: boolean;
 };
@@ -23,7 +30,14 @@ const configDefinitions = {
   explorer: { key: 'zeta.show.explorer', default: true },
   filterFolders: { key: 'zeta.list.filterFolders', default: ['node_modules', '.vscode', '.git', '.svn'] },
   folders: { key: 'zeta.list.folders', default: [] as string[] },
+  pathExtensions: {
+    key: 'zeta.path.extensions',
+    default: ['.ts', '.js', '.vue', '.tsx', '.jsx', '.json', '.css', '.less', '.scss', '.sass', '.styl', '.stylus'],
+  },
+  pathMaxEntries: { key: 'zeta.path.maxCompletionEntries', default: 200 },
+  pathShowHidden: { key: 'zeta.path.showHiddenFiles', default: false },
   runScriptAskArguments: { key: 'zeta.runScript.askArguments', default: true },
+  styleMaxImportDepth: { key: 'zeta.style.maxImportDepth', default: 3 },
   tag: { key: 'zeta.string.tag', default: 'div' },
   terminal: { key: 'zeta.show.terminal', default: true },
 } satisfies { [K in keyof ConfigTypeMap]: { key: string; default: ConfigTypeMap[K] } };
@@ -46,7 +60,12 @@ export class Configuration {
     return (typeof value === typeof fallback ? value : fallback) as ConfigTypeMap[K];
   }
 
-  /** 写入配置：存在工作区时写 Workspace 作用域，否则写 Global，避免多窗口互相覆盖 */
+  /**
+   * 写入配置：存在工作区时写 Workspace 作用域（.vscode/settings.json，仅当前工作区生效），
+   * 否则写 Global——避免多窗口互相覆盖。注意：对 zeta.string.tag、zeta.case.cycleOrder 这类
+   * 偏「个人偏好」的配置，在工作区里修改不会全局生效；想全局生效可先关闭工作区再改，
+   * 或直接编辑全局 settings.json。
+   */
   public static async set<K extends keyof ConfigTypeMap>(key: K, value: ConfigTypeMap[K]): Promise<void> {
     const target = vscode.workspace.workspaceFolders?.length
       ? (vscode.ConfigurationTarget?.Workspace ?? 2)
@@ -67,8 +86,20 @@ export class Configuration {
   static get FOLDERS() {
     return this.get('folders');
   }
+  static get PATH_EXTENSIONS() {
+    return this.get('pathExtensions');
+  }
+  static get PATH_MAX_ENTRIES() {
+    return this.get('pathMaxEntries');
+  }
+  static get PATH_SHOW_HIDDEN() {
+    return this.get('pathShowHidden');
+  }
   static get RUN_SCRIPT_ASK_ARGUMENTS() {
     return this.get('runScriptAskArguments');
+  }
+  static get STYLE_MAX_IMPORT_DEPTH() {
+    return this.get('styleMaxImportDepth');
   }
   static get TAG() {
     return this.get('tag');

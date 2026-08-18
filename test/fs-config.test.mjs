@@ -28,7 +28,8 @@ test('parseUriList：盘符 / POSIX / UNC / 原生路径 / 注释与空行 / 非
     assert.deepEqual(paths('/native/path'), ['/native/path']);
     assert.deepEqual(paths('file:///a\n# comment\n\nfile:///b'), ['/a', '/b']);
     assert.deepEqual(paths('https://example.com/x\nfile:///c'), ['/c']);
-    assert.deepEqual(paths('file:///a%zz'), [], '非法百分号编码丢弃');
+    // 非法百分号编码：解码失败降级为原字符串路径
+    assert.deepEqual(paths('file:///a%zz'), ['/a%zz']);
     assert.deepEqual(paths(''), []);
   } finally {
     cleanup(ws);

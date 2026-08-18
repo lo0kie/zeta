@@ -120,7 +120,13 @@ export function parseUriList(uriList: string): vscode.Uri[] {
       try {
         uris.push(vscode.Uri.file(decodeURIComponent(rest)));
       } catch {
-        // 含非法百分号编码的行直接丢弃
+        // 解码失败（如文件名含未转义的 %）：不丢弃，降级把原字符串直接当普通路径使用，
+        // 避免部分文件管理器（URI 编码不规范）拖拽进来的目录"莫名其妙"丢失
+        try {
+          uris.push(vscode.Uri.file(rest));
+        } catch (fallbackError) {
+          console.warn(`[zeta] 无法解析拖拽路径: ${rest}`, fallbackError);
+        }
       }
     } else if (/^[A-Za-z]:[\\/]|^[/\\]/.test(trimmed)) {
       // 部分系统文件管理器直接提供原生路径

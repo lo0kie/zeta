@@ -9,6 +9,9 @@ import { cleanup, countFs, loadModule, makeDocument, makeWorkspace, setConfig, s
 const require = createRequire(import.meta.url);
 const { Uri } = require(shimPath);
 
+// provideCompletionItems 现在返回 CompletionList，统一解包成 items 数组
+const unwrapItems = result => (result ? (Array.isArray(result) ? result : result.items) : []);
+
 const { resolveAliasCandidates, getAliasContext, PathCompletionProvider } = await loadModule(`
   export { resolveAliasCandidates, getAliasContext } from './src/core/path-alias';
   export { PathCompletionProvider } from './src/providers/path-completion';
@@ -89,17 +92,20 @@ test('path-completion：readDirectory 缓存 + 目录优先截断', async () => 
 
     const counter = countFs('readDirectory');
     try {
-      const items1 = (await provider.provideCompletionItems(doc, position)) ?? [];
+      const result1 = await provider.provideCompletionItems(doc, position);
+      const items1 = unwrapItems(result1);
       assert.equal(counter.count(), 1, '首次读盘');
-      assert.equal(items1.length, 200, '截断 200');
+      assert.equal(items1.length, 200, '单次返回上限 200');
+      assert.equal(result1.isIncomplete, true, '全量 250 超过上限，标记未加载完');
       assert.ok(
         items1.slice(0, 10).every(i => i.insertText.endsWith('/')),
         '目录优先且保留'
       );
 
-      const items2 = (await provider.provideCompletionItems(doc, position)) ?? [];
+      const result2 = await provider.provideCompletionItems(doc, position);
+      const items2 = unwrapItems(result2);
       assert.equal(counter.count(), 1, '缓存命中不重读盘');
-      assert.equal(items2.length, 200, '缓存结果仍为截断');
+      assert.equal(items2.length, 200, '缓存全量列表后仍按上限渲染');
       assert.ok(
         items2.slice(0, 10).every(i => i.insertText.endsWith('/')),
         '缓存结果仍目录优先'
@@ -137,7 +143,7 @@ test('path-completion：裸 @ 不触发（避免吃掉别名前缀）；@/ 正�
       character: slash.length,
       translate: (dl, dc) => ({ line: 0, character: slash.length + dc }),
     });
-    assert.ok(Array.isArray(itemsSlash), '@/ 正常触发补全（空目录返回空数组）');
+    assert.ok(itemsSlash && Array.isArray(itemsSlash.items), '@/ 正常触发补全（空目录返回空 CompletionList）');
   } finally {
     cleanup(ws);
   }
@@ -154,12 +160,13 @@ test('path-completion：同级补全排除当前文件自身', async () => {
     const text = `import x from './`;
     const doc = makeDocument(text, join(dir, 'b.ts'), 'typescript');
     const provider = new PathCompletionProvider();
-    const items =
-      (await provider.provideCompletionItems(doc, {
+    const items = unwrapItems(
+      await provider.provideCompletionItems(doc, {
         line: 0,
         character: text.length,
         translate: (dl, dc) => ({ line: 0, character: text.length + dc }),
-      })) ?? [];
+      })
+    );
     const labels = items.map(i => i.label).sort();
     assert.deepEqual(labels, ['a.ts'], 'b.ts 自身不在候选中');
   } finally {
@@ -199,8 +206,8 @@ test('path-completion：/src 绝对路径无尾斜杠时补全根目录', async 
       character: 19,
       translate: (l, c) => ({ line: 0, character: 19 + c }),
     });
-    assert.ok(items?.some(i => i.label === 'src'), '根目录下 src 在列');
-    assert.ok(!items?.some(i => i.label === 'app.ts'), 'src 目录内容不应出现在根目录补全');
+    assert.ok(unwrapItems(items).some(i => i.label === 'src'), '根目录下 src 在列');
+    assert.ok(!unwrapItems(items).some(i => i.label === 'app.ts'), 'src 目录内容不应出现在根目录补全');
   } finally {
     cleanup(ws);
   }
@@ -221,7 +228,7 @@ test('path-completion：/src/ 带尾斜杠时补全 src 目录内容', async () 
       character: 20,
       translate: (l, c) => ({ line: 0, character: 20 + c }),
     });
-    assert.ok(items?.some(i => i.label === 'app.ts'), 'src 目录内容在列');
+    assert.ok(unwrapItems(items).some(i => i.label === 'app.ts'), 'src 目录内容在列');
   } finally {
     cleanup(ws);
   }
@@ -242,7 +249,7 @@ test('path-completion：/src/ap 中间态补全 src 目录（非 src/ap）', asy
       character: 21,
       translate: (l, c) => ({ line: 0, character: 21 + c }),
     });
-    assert.ok(items?.some(i => i.label === 'app.ts'), '浏览的是 src 目录，ap 前缀可命中 app.ts');
+    assert.ok(unwrapItems(items).some(i => i.label === 'app.ts'), '浏览的是 src 目录，ap 前缀可命中 app.ts');
   } finally {
     cleanup(ws);
   }

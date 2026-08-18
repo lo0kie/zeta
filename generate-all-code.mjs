@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SOURCE_DIRS = ['src', 'test'];
+const SOURCE_DIRS = ['src'];
+const ADDITIONAL_FILES = ['package.json'];
 const OUTPUT_FILE = 'all_code.txt';
 const TARGET_EXTENSIONS = ['.ts', '.tsx', '.vue', '.less', '.css', '.json', '.js', '.mjs'];
 const LANG_MAP = {
@@ -29,14 +30,21 @@ function collectTsFiles(dir, list = []) {
 }
 
 function main() {
-  const allFiles = SOURCE_DIRS.flatMap(dir => {
-    const dirPath = path.resolve(process.cwd(), dir);
-    if (!fs.existsSync(dirPath)) {
-      console.warn(`目录 "${dirPath}" 不存在，已跳过`);
-      return [];
-    }
-    return collectTsFiles(dirPath);
-  });
+  const extraFiles = ADDITIONAL_FILES.map(file => path.resolve(process.cwd(), file)).filter(full =>
+    fs.existsSync(full)
+  );
+
+  const allFiles = [
+    ...extraFiles,
+    ...SOURCE_DIRS.flatMap(dir => {
+      const dirPath = path.resolve(process.cwd(), dir);
+      if (!fs.existsSync(dirPath)) {
+        console.warn(`目录 "${dirPath}" 不存在，已跳过`);
+        return [];
+      }
+      return collectTsFiles(dirPath);
+    }),
+  ];
 
   const files = Array.from(new Set(allFiles))
     .map(full => path.relative(process.cwd(), full))
@@ -49,10 +57,8 @@ function main() {
 
   const sections = files.map(rel => {
     const relPosix = rel.replace(/\\/g, '/');
-    const ext = path.extname(rel);
-    const lang = LANG_MAP[ext] || 'text';
     const content = fs.readFileSync(rel, 'utf8').replace(/\r\n/g, '\n').replace(/\n*$/, '');
-    return `## ${relPosix}\n\n\`\`\`${lang}\n${content}\n\`\`\``;
+    return `## ${relPosix}\n\n${content}`;
   });
 
   const header = `# zeta 源码\n\n共 ${files.length} 个源文件。\n\n---\n\n`;

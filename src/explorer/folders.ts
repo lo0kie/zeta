@@ -2,6 +2,7 @@ import { Configuration } from '@/core/configuration';
 import { resolveConfiguredFolderUri } from '@/core/fs';
 import * as vscode from 'vscode';
 
+/** 把拖拽/命令传入的目录追加进配置：按已解析 uri 去重，无新增则不写配置 */
 export async function appendConfiguredFolders(uris: vscode.Uri[]): Promise<void> {
   if (uris.length === 0) return;
 
@@ -13,6 +14,7 @@ export async function appendConfiguredFolders(uris: vscode.Uri[]): Promise<void>
   await Configuration.set('folders', [...existing, ...additions]);
 }
 
+/** 从配置中移除指定目录：按已解析 uri 匹配（不存在则不动） */
 export async function removeConfiguredFolder(uri: vscode.Uri): Promise<void> {
   const existing = Configuration.FOLDERS;
   const remaining = existing.filter(folder => resolveConfiguredFolderUri(folder)?.toString() !== uri.toString());

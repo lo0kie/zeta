@@ -1,3 +1,6 @@
+/**
+ * 扩展激活入口：装配全部 provider、命令、事件与状态栏组件。
+ */
 import { registerCommands } from '@/commands';
 import { registerEvents } from '@/events';
 import { ExplorerTreeViewProvider } from '@/explorer/provider';
@@ -9,6 +12,9 @@ import { TerminalToggleStatusItem } from '@/statusbar/terminal-toggle';
 import * as vscode from 'vscode';
 import { registerStyleDefinition } from './providers/style-definition';
 import { registerStyleSemanticTokens } from './providers/style-semantic-tokens';
+import { registerPathDefinition } from './providers/path-definition';
+import { registerStyleImportLinks } from './providers/style-import-link';
+import { registerImportHover } from './providers/import-hover';
 
 /** 扩展激活入口：装配资源导航、路径/样式补全、颜色/悬浮提供者、终端开关与全部命令 */
 export function activate(context: vscode.ExtensionContext) {
@@ -29,6 +35,9 @@ export function activate(context: vscode.ExtensionContext) {
     registerStyleHover(),
     registerStyleDefinition(),
     registerStyleSemanticTokens(),
+    registerPathDefinition(),
+    registerStyleImportLinks(),
+    registerImportHover(),
     // 文档关闭即释放文档级缓存（样式解析 / 颜色结果），避免长期运行内存累积
     vscode.workspace.onDidCloseTextDocument(doc => {
       clearStyleDocCache(doc.uri);

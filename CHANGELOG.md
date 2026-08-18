@@ -2,6 +2,61 @@
 
 本文件自 1.5.0 起维护。1.5.1 起的修复随版本累积记录；1.5.0 的修复见下方。更早版本的功能与修复见 README 与 git 历史。
 
+## [1.5.2] - 2026-08-18
+
+### 新增
+
+路径 / 导入跳转（`src/providers/path-definition.ts`）：
+
+- 定义 provider 覆盖 js / ts / jsx / tsx / vue / html / css / less / scss / sass / stylus / json 全部文件类型，解析相对 `./`、父级 `../`、省略 `./` 的子路径、`@` 别名（tsconfig paths）、`~/`、绝对路径
+- 同名不同后缀的多个文件全部返回（VS Code F12 在多个结果间切换），目录导入回退 index 文件
+- 无工作区（单文件打开）时，按最近的 tsconfig / jsconfig / package.json 所在目录兜底解析 `@/`、`/`、`~/`
+- 返回 `LocationLink` 并带 `originSelectionRange`：Ctrl+悬停的下划线覆盖整个导入字符串，不再被 `/ @ .` 截断成单个单词
+
+样式导入链接（`src/providers/style-import-link.ts`）：
+
+- less / css / scss / sass / stylus 中 `@import` / `@use` / `@forward` / `@require` 与引号形式 `url(...)` 生成可点击的 DocumentLink，指向解析出的真实文件（绕开内置 css-language-features 返回的"无后缀缺失路径"坏定义）
+
+导入悬浮（`src/providers/import-hover.ts`）：
+
+- 任意受支持语言里悬浮路径字符串，追加可点击的「打开 <解析文件>」链接（`zeta.openResolvedImport`）与纯文本跳转目标；外部 URL 与裸包名不触发
+
+诊断命令 `zeta.editor.debugResolveImport`：
+
+- 展示光标处导入字符串的解析结果（工作区、命中的文件列表），命中时提供「打开第一个」按钮
+
+用户可配置化：
+
+- 新增 `zeta.path.extensions`（路径跳转/补全尝试的文件后缀顺序）、`zeta.path.maxCompletionEntries`（补全候选上限）、`zeta.path.showHiddenFiles`（是否补全隐藏文件）、`zeta.style.maxImportDepth`（样式 @import 递归展开深度上限）四个配置项
+
+### 性能与健壮性
+
+- 终端（`src/commands/terminal.ts`）：`disposeSame` 增加实例 Map 追踪——用户在终端内重命名后仍能按创建名精确销毁，不再依赖 `name` 文本比对
+- 路径跳转（`src/providers/path-definition.ts`）：后缀探测改 `Promise.all` 并发，结果按探测顺序收集（保序），降低 F12 磁盘 I/O 延迟
+- 目录拖拽（`src/explorer/provider.ts`）：`isDirectory` 校验并发化，消除拖拽大量项时的串行 stat 卡顿
+- 路径补全（`src/providers/path-completion.ts`）：缓存全量目录列表 + 按输入前缀内存过滤 + `CompletionList.isIncomplete`，大目录不再因截断丢失有效候选
+- 偏移换算（`src/utils/edits.ts`）：`positionAt` 用原生 `indexOf` 跳跃数换行，替代逐字符遍历
+- 拖拽路径解析（`src/core/fs.ts`）：`decodeURIComponent` 失败时降级把原字符串当路径使用，不再静默丢弃（部分文件管理器编码不规范）
+- 样式缓存失效（`src/providers/style-completion.ts`）：`clearStyleFileCache` 由全量 `docParseCache.clear()` 改为按「被导入文件 → 导入方」反向索引精准失效，保存任意样式文件只清受影响文档（含传递依赖链，沿导入链 BFS 逐级向上），大项目打开很多样式文件时不再每次保存全量重算
+
+### 修复
+
+- 裸模块说明符（`import react from 'react'`）不再被当作相对路径解析，避免与同名本地文件产生错误跳转
+- 带已知扩展名的导入（`./foo.tsx`，实际文件为 `./foo.ts`）不再直接放弃，先精确匹配再回退同基名其他扩展名（NodeNext 风格 `.js` → `.ts`）
+- 含点的文件名（`my.component`）不再被误拆为扩展名
+
+### 维护与一致性
+
+- 样式能力注册的语言列表收敛为单一来源 `src/providers/style-languages.ts`：补全 / 链接覆盖全部样式语言 + vue；符号解析系（hover / definition / semantic）只注册 CSS 系语法（stylus 的赋值与缩进语法未适配，硬注册会产生错误跳转与悬浮），子集差异原因在文件头注释显式说明
+- `COLOR_VALUE_PATTERN` / `createColorSwatchUri` 下沉至 `src/utils/color.ts`（补全与悬浮共用，消除逐字重复，避免后续修改遗漏一处）
+- 状态栏终端切换（`src/statusbar/terminal-toggle.ts`）：移除 `?.()` 可选链防御——`engines.vscode ^1.85.0` 已保证 `onDidOpenTerminal` / `onDidCloseTerminal` / `onDidChangeConfiguration` 存在，防御属于死代码
+- 引号扫描（`src/utils/quote.ts`）：文件头补充「已知限制」注释（TSX 泛型 `<T>`、复杂三元表达式里的 `/` 可能误判为正则；误判仅影响后续字符串 token 提取，不改变文本内容）
+
+### 测试
+
+- 测试套件由 150 增至 241 项全部通过；新增 path-definition（23 例，覆盖解析分支/守卫/探测/无工作区兜底）、style-import-link（8 例）、import-hover（5 例）、color/case/quote/edits/fs/tag 等纯函数边界用例，以及三级依赖链缓存失效用例（main → a → b → c，修改最底层文件后全部引用方缓存须失效）
+- 测试脚手架（`test/helpers.mjs`）：移除从未使用的 `mockInsertSnippet` 死代码；顶层持有 shim 引用，消除 `insertSnippet` 兜底分支构造 `vscode.Range` 时的裸引用隐患
+
 ## [1.5.1] - 2026-08-18
 
 全量代码审查（覆盖 `src/` 全部 35 个 TS 文件与构建脚本）中复现并修复的缺陷，含边界场景回归。测试套件由 136 增至 150 项全部通过。

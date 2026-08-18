@@ -1,3 +1,6 @@
+/**
+ * 状态栏终端切换按钮：显示当前终端数量，点击展开/收起终端面板。
+ */
 import { Configuration } from '@/core/configuration';
 import * as vscode from 'vscode';
 
@@ -10,20 +13,18 @@ export class TerminalToggleStatusItem implements vscode.Disposable {
   private _listeners: vscode.Disposable[] = [];
 
   constructor() {
-    const alignment = vscode.StatusBarAlignment?.Left ?? 1;
-    this._item = vscode.window.createStatusBarItem(alignment, 100);
+    // engines.vscode ^1.85.0 已保证以下 API 存在，无需可选链防御
+    this._item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this._item.name = 'Zeta 终端切换';
     this._item.command = 'zeta.terminal.toggle';
 
-    const listeners = [
-      vscode.window.onDidOpenTerminal?.(() => this.update()),
-      vscode.window.onDidCloseTerminal?.(() => this.update()),
-      vscode.workspace.onDidChangeConfiguration?.(({ affectsConfiguration }) => {
+    this._listeners.push(
+      vscode.window.onDidOpenTerminal(() => this.update()),
+      vscode.window.onDidCloseTerminal(() => this.update()),
+      vscode.workspace.onDidChangeConfiguration(({ affectsConfiguration }) => {
         if (affectsConfiguration('zeta.show.terminal')) this.update();
-      }),
-    ].filter((l): l is vscode.Disposable => !!l && typeof l.dispose === 'function');
-
-    this._listeners.push(...listeners);
+      })
+    );
 
     this.update();
   }

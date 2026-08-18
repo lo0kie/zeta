@@ -1,14 +1,13 @@
-﻿import { basename, dirname, isFile } from '@/core/fs';
+/**
+ * 样式补全核心：Less/SCSS/CSS 变量与 Mixin 符号表、选择器补全、@import/@use/@forward 递归展开（防循环）、文档级与文件级缓存。
+ */
+import { basename, dirname, isFile } from '@/core/fs';
 import { resolveAliasCandidates } from '@/core/path-alias';
 import { TtlCache } from '@/core/ttl-cache';
 import * as vscode from 'vscode';
-
-const COLOR_VALUE_PATTERN = /(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\))/i;
-
-function createColorSwatchUri(color: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="11" height="11"><rect width="12" height="12" rx="2" fill="${color}" stroke="#88888880" stroke-width="1.5"/></svg>`;
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
-}
+import { Configuration } from '@/core/configuration';
+import { COLOR_VALUE_PATTERN, createColorSwatchUri } from '@/utils/color';
+import { STYLE_COMPLETION_LANGS, STYLE_LANGUAGES } from './style-languages';
 
 export interface StyleSymbol {
   name: string;
@@ -19,7 +18,6 @@ export interface StyleSymbol {
   snippet?: string;
 }
 
-const STYLE_EXTENSIONS = ['less', 'css', 'scss', 'sass', 'stylus', 'postcss', 'vue'];
 const STYLE_CACHE_TTL_MS = 10000;
 
 const styleCache = new TtlCache<StyleSymbol[]>(STYLE_CACHE_TTL_MS);
@@ -33,18 +31,55 @@ function getDocCacheKey(uri: vscode.Uri): string {
   return uri.toString();
 }
 
+/** 被导入文件 uri → 依赖它的文档 uri 集合；保存被导入文件时据此精准失效导入方缓存 */
+const importersOf = new Map<string, Set<string>>();
+
+function recordImporter(importedKey: string, importerKey: string): void {
+  let importers = importersOf.get(importedKey);
+  if (!importers) {
+    importers = new Set();
+    importersOf.set(importedKey, importers);
+  }
+  importers.add(importerKey);
+}
+
 export function clearStyleDocCache(uri: vscode.Uri): void {
-  docParseCache.delete(getDocCacheKey(uri));
+  const key = getDocCacheKey(uri);
+  docParseCache.delete(key);
+  // 文档关闭：从反向索引移除它作为导入方的记录，避免长期累积
+  for (const [imported, importers] of importersOf) {
+    if (importers.has(key)) {
+      importers.delete(key);
+      if (importers.size === 0) importersOf.delete(imported);
+    }
+  }
 }
 
 export function clearStyleFileCache(uri: vscode.Uri): void {
   const key = uri.toString();
   fileTextCache.delete(key);
   styleCache.delete(key);
-  docParseCache.clear();
+
+  // 精准失效：清掉直接或间接依赖本文件（导入链）的全部文档解析缓存，
+  // 替代 docParseCache.clear()——大项目打开很多样式文件时避免每次保存全量重算。
+  // 传递依赖也要清：B 导入 A、C 导入 B 时，C 的缓存里已合入 A 的符号。
+  const affected = new Set<string>([key]);
+  const queue = [key];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    docParseCache.delete(current);
+    for (const importer of importersOf.get(current) ?? []) {
+      if (!affected.has(importer)) {
+        affected.add(importer);
+        queue.push(importer);
+      }
+    }
+  }
+  // 受影响文档的「被导入」记录一并移除，索引不会残留失效条目
+  for (const k of affected) importersOf.delete(k);
 }
 
-const CSS_LIKE_LANGS = new Set(['less', 'css', 'scss', 'sass', 'stylus', 'postcss']);
+const CSS_LIKE_LANGS = new Set<string>(STYLE_LANGUAGES);
 
 const AT_RULE_KEYWORDS = new Set([
   'media',
@@ -142,6 +177,19 @@ export async function resolveImportUri(documentUri: vscode.Uri, importPath: stri
   return undefined;
 }
 
+/** 判断 text[index] 是否被反斜杠转义：向前数连续反斜杠，奇数个则已转义（偶数个则未转义）。
+ * 与 utils/quote.ts 的 scanStringTokens 中「遇到 \ 直接 i += 2 跳过」是同一问题的两种等价实现，
+ * 行为应保持一致；改动其一需同步验证另一处。 */
+function isEscapedAt(text: string, index: number): boolean {
+  let backslashCount = 0;
+  let j = index - 1;
+  while (j >= 0 && text[j] === '\\') {
+    backslashCount++;
+    j--;
+  }
+  return backslashCount % 2 !== 0;
+}
+
 /** 扫描顶层（非字符串/非括号内）出现的第一个分隔符：优先逗号，其次分号；都没有时回落逗号 */
 function findTopLevelSeparator(rawParams: string): string {
   let depth = 0;
@@ -153,13 +201,7 @@ function findTopLevelSeparator(rawParams: string): string {
     const char = rawParams[i];
 
     if (char === '"' || char === "'") {
-      let backslashCount = 0;
-      let j = i - 1;
-      while (j >= 0 && rawParams[j] === '\\') {
-        backslashCount++;
-        j--;
-      }
-      if (backslashCount % 2 === 0) {
+      if (!isEscapedAt(rawParams, i)) {
         if (!inString) inString = char;
         else if (inString === char) inString = null;
       }
@@ -193,15 +235,7 @@ function splitTopLevelParams(rawParams: string): string[] {
     const char = rawParams[i];
 
     if (char === '"' || char === "'") {
-      let backslashCount = 0;
-      let j = i - 1;
-      while (j >= 0 && rawParams[j] === '\\') {
-        backslashCount++;
-        j--;
-      }
-      const isEscaped = backslashCount % 2 !== 0;
-
-      if (!isEscaped) {
+      if (!isEscapedAt(rawParams, i)) {
         if (!inString) inString = char;
         else if (inString === char) inString = null;
       }
@@ -421,6 +455,11 @@ export function getStyleBlocks(
   let match: RegExpExecArray | null;
 
   while ((match = styleRegex.exec(text)) !== null) {
+    // 跳过被 HTML 注释包裹的 <style>（<!-- <style>...</style> --> 临时禁用场景），
+    // 注释内残缺标签不应被当成真实样式块；判定方式与 tag.ts 的 <!-- --> 跳过同思路
+    const commentStart = text.lastIndexOf('<!--', match.index);
+    if (commentStart !== -1 && commentStart > text.lastIndexOf('-->', match.index)) continue;
+
     const attrs = match[1];
     const content = match[2];
     const langMatch = attrs.match(/lang=['"]([^'"]+)['"]/i);
@@ -457,6 +496,7 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
       if (visited.has(uriStr)) continue;
       visited.add(uriStr);
       resultUris.push(targetUri);
+      recordImporter(uriStr, key);
       try {
         queue.push({ uri: targetUri, content: await readFileTextCached(targetUri), depth: 0 });
       } catch {}
@@ -467,7 +507,8 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
 
   while (queue.length > 0) {
     const current = queue.shift()!;
-    if (current.depth >= 3) continue;
+    // 导入递归展开深度上限（zeta.style.maxImportDepth），防止过度膨胀与循环
+    if (current.depth >= Configuration.STYLE_MAX_IMPORT_DEPTH) continue;
 
     const cleanContent = stripCommentsSafe(current.content);
     importRegex.lastIndex = 0;
@@ -480,6 +521,7 @@ export async function collectImportedFiles(document: vscode.TextDocument): Promi
       if (visited.has(uriStr)) continue;
       visited.add(uriStr);
       resultUris.push(targetUri);
+      recordImporter(uriStr, key);
 
       try {
         queue.push({ uri: targetUri, content: await readFileTextCached(targetUri), depth: current.depth + 1 });
@@ -662,6 +704,6 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
 
 export function registerStyleCompletion(): vscode.Disposable {
   const provider = new StyleCompletionProvider();
-  const selectors = STYLE_EXTENSIONS.map(language => ({ language, scheme: 'file' }));
+  const selectors = STYLE_COMPLETION_LANGS.map(language => ({ language, scheme: 'file' }));
   return vscode.languages.registerCompletionItemProvider(selectors, provider, '@', '.', '$', '-');
 }

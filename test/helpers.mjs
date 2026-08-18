@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 export const shimPath = join(ROOT, 'test', 'vscode-shim.cjs');
+// 顶层持有 shim 引用：editorWith 的 insertSnippet 兜底分支需要构造 vscode.Range，
+// 若在函数内临时 require 或裸引用，分支触发时会抛 ReferenceError
+const vscode = require(shimPath);
 
 const aliasPlugin = {
   name: 'alias-vscode',
@@ -130,6 +133,7 @@ export function makeDocument(text, filePath, languageId, version = 1) {
     uri: Uri.file(filePath),
     languageId,
     version,
+    lineCount: lines.length,
     getText: range => (range ? text.slice(offsetAt(range.start), offsetAt(range.end)) : text),
     offsetAt,
     positionAt: off => {
@@ -183,37 +187,6 @@ export function countFs(method) {
       vscode.workspace.fs[method] = original;
     },
   };
-}
-
-function mockInsertSnippet(editor, snippet, location) {
-  const doc = editor.document;
-  const rawRanges = location ? (Array.isArray(location) ? location : [location]) : editor.selections;
-
-  const ranges = rawRanges.map(loc => {
-    if (loc instanceof vscode.Position) return new vscode.Range(loc, loc);
-    return loc;
-  });
-
-  const template = snippet.value;
-  const ops = [];
-  const newSelections = [];
-
-  for (const range of ranges) {
-    const selectedText = doc.getText(range);
-    let expanded = template.replace(/\$TM_SELECTED_TEXT/g, selectedText);
-
-    let placeholderMatch = expanded.match(/\${1:([^}]+)}/);
-    let placeholderText = placeholderMatch ? placeholderMatch[1] : '';
-    let processedText = expanded.replace(/\${\d+:([^}]+)}/g, '$1').replace(/\$\d+/g, '');
-
-    ops.push({
-      range,
-      text: processedText,
-    });
-  }
-
-  globalThis.__lastApply = ops;
-  return Promise.resolve(true);
 }
 
 // 在 test/helpers.mjs 末尾替换 editorWith 实现

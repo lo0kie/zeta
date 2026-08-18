@@ -1,3 +1,4 @@
+// RGB 颜色值，r/g/b/a 均为归一化 0~1（与 vscode.Color 一致，方便直接用于色块装饰）
 export interface ColorRgb {
   r: number;
   g: number;
@@ -5,10 +6,24 @@ export interface ColorRgb {
   a: number;
 }
 
+/** 识别色值的正则：hex / rgb() / hsl()（补全与悬浮里用于判断是否展示色块） */
+export const COLOR_VALUE_PATTERN = /(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\))/i;
+
+/** 把色值渲染成 12×12 的内联 SVG 色块（data URI），悬浮/补全文档里直接展示颜色 */
+export function createColorSwatchUri(color: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="11" height="11"><rect width="12" height="12" rx="2" fill="${color}" stroke="#88888880" stroke-width="1.5"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+/** 把 0~255 之外的通道值钳制到合法区间 */
 export function clampChannel(value: number): number {
   return Math.min(255, Math.max(0, value));
 }
 
+/**
+ * HSL → RGB。s/l 取 0~1，h 任意角度（负值/超界自动回绕到 0~360）。
+ * 返回 r/g/b 为 0~1 的归一化值。
+ */
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   h = ((h % 360) + 360) % 360;
   const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -18,6 +33,7 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
     g = 0,
     b = 0;
 
+  // 按色相区间取主色/副色
   if (h < 60) {
     r = c;
     g = x;
@@ -41,6 +57,10 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
   return [r + m, g + m, b + m];
 }
 
+/**
+ * RGB → HSL。输入 r/g/b 为归一化 0~1。
+ * 返回 [h, s, l]：h 为 0~360 整数，s/l 为 0~100 整数（百分比）。
+ */
 export function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
@@ -63,6 +83,7 @@ export function rgbToHsl(r: number, g: number, b: number): [number, number, numb
   return [Math.round(h), Math.round(s * 100), Math.round(l * 100)];
 }
 
+/** 解析 hex 色值（3/4/6/8 位，不含 # 前缀），非法长度返回 null；通道归一化为 0~1 */
 export function parseHexColor(hex: string): ColorRgb | null {
   let r = 0;
   let g = 0;
@@ -86,6 +107,7 @@ export function parseHexColor(hex: string): ColorRgb | null {
   return { r, g, b, a };
 }
 
+/** 解析 rgb 单个通道：支持整数或百分比（% 按 255 换算），非法返回 NaN 由调用方判空 */
 function parseChannelValue(val: string): number {
   if (val.endsWith('%')) {
     return (Number(val.slice(0, -1)) / 100) * 255;
@@ -93,6 +115,7 @@ function parseChannelValue(val: string): number {
   return Number(val);
 }
 
+/** 解析透明度：缺省为 1，支持百分比 */
 function parseAlphaValue(alpha?: string): number {
   if (alpha === undefined) return 1;
   if (alpha.endsWith('%')) {
@@ -101,6 +124,7 @@ function parseAlphaValue(alpha?: string): number {
   return Number(alpha);
 }
 
+/** 解析 rgb()/rgba() 的三个通道与可选透明度；越界或非法返回 null */
 export function parseRgbColor(r: string, g: string, b: string, alpha?: string): ColorRgb | null {
   const red = parseChannelValue(r);
   const green = parseChannelValue(g);
@@ -114,6 +138,7 @@ export function parseRgbColor(r: string, g: string, b: string, alpha?: string): 
   return { r: red / 255, g: green / 255, b: blue / 255, a: Math.min(1, Math.max(0, a)) };
 }
 
+/** 解析色相值：支持 deg / grad / rad / turn 单位，无单位按度 */
 function parseHueValue(hStr: string): number {
   if (hStr.endsWith('deg')) return Number(hStr.slice(0, -3));
   if (hStr.endsWith('grad')) return Number(hStr.slice(0, -4)) * 0.9;
@@ -122,6 +147,7 @@ function parseHueValue(hStr: string): number {
   return Number(hStr);
 }
 
+/** 解析 hsl()/hsla()：s/l 为百分比（无 % 按 0~1 原始值），h 支持多种单位；越界或非法返回 null */
 export function parseHslColor(hStr: string, sStr: string, lStr: string, alpha?: string): ColorRgb | null {
   const h = parseHueValue(hStr);
   const s = sStr.endsWith('%') ? Number(sStr.slice(0, -1)) / 100 : Number(sStr);

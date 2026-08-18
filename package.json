@@ -1,9 +1,9 @@
 {
   "name": "lookie-zeta",
   "displayName": "zeta",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "icon": "./public/icon.png",
-  "description": "一体化开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全、颜色编辑、脚本运行。零运行时依赖、无遥测。",
+  "description": "开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全与跳转、颜色编辑、脚本运行。零运行时依赖、无遥测。",
   "categories": [
     "Other"
   ],
@@ -131,6 +131,16 @@
         "command": "zeta.editor.cycleQuotes",
         "title": "切换引号 (' / \" / `)",
         "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.debugResolveImport",
+        "title": "调试导入解析",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.openResolvedImport",
+        "title": "打开解析的导入文件",
+        "category": "zeta"
       }
     ],
     "configuration": {
@@ -187,6 +197,7 @@
         },
         "zeta.list.folders": {
           "type": "array",
+          "description": "资源导航根目录；绝对路径或相对第一个工作区根的相对路径",
           "items": {
             "type": "string"
           },
@@ -195,7 +206,7 @@
         },
         "zeta.list.filterFolders": {
           "type": "array",
-          "description": "explorer中过滤的关键字",
+          "description": "资源导航中过滤的目录名关键字",
           "items": {
             "type": "string"
           },
@@ -221,6 +232,42 @@
           "type": "boolean",
           "description": "运行脚本前是否询问追加参数（如 --watch）；关闭后选中脚本直接运行",
           "default": true
+        },
+        "zeta.path.extensions": {
+          "type": "array",
+          "description": "路径跳转/补全时尝试的文件后缀顺序（带点，如 \".ts\"）；同名不同后缀会按此顺序全部列出供选择",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".ts",
+            ".js",
+            ".vue",
+            ".tsx",
+            ".jsx",
+            ".json",
+            ".css",
+            ".less",
+            ".scss",
+            ".sass",
+            ".styl",
+            ".stylus"
+          ]
+        },
+        "zeta.path.maxCompletionEntries": {
+          "type": "number",
+          "description": "路径补全单个目录的候选上限，超出按目录优先截断（避免超大目录拖慢渲染）",
+          "default": 200
+        },
+        "zeta.path.showHiddenFiles": {
+          "type": "boolean",
+          "description": "路径补全是否显示以 . 开头的隐藏文件/目录",
+          "default": false
+        },
+        "zeta.style.maxImportDepth": {
+          "type": "number",
+          "description": "样式补全/悬浮/跳转对 @import/@use/@forward 的递归展开深度上限（防循环与膨胀）",
+          "default": 3
         }
       }
     },
@@ -319,6 +366,10 @@
       ],
       "commandPalette": [
         {
+          "command": "zeta.openResolvedImport",
+          "when": "false"
+        },
+        {
           "command": "zeta.explorer.refresh",
           "when": "false"
         },
@@ -359,6 +410,10 @@
           "when": "config.zeta.show.explorer"
         },
         {
+          "command": "zeta.terminal.toggle",
+          "when": "config.zeta.show.terminal"
+        },
+        {
           "command": "zeta.editor.cycleCase",
           "when": "editorIsOpen && !editorReadonly && editorHasSelection"
         },
@@ -381,6 +436,10 @@
         {
           "command": "zeta.editor.cycleQuotes",
           "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        },
+        {
+          "command": "zeta.editor.debugResolveImport",
+          "when": "editorIsOpen && editorLangId =~ /^(javascript|typescript|javascriptreact|typescriptreact|vue|html|css|less|scss|sass|stylus|json)$/"
         }
       ]
     },

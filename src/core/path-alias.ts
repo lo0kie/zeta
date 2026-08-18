@@ -69,6 +69,29 @@ async function findNearestConfigFile(uri: vscode.Uri): Promise<vscode.Uri | unde
   return undefined;
 }
 
+/**
+ * 从当前文件向上查找「项目根」：最近的 tsconfig.json / jsconfig.json / package.json 所在目录。
+ * 用于没有 workspace folder（单文件打开等）时，为 @/ 别名、/ 绝对路径、~/ 提供解析基准。
+ */
+export async function findProjectRootUri(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
+  let dir = dirname(uri);
+  while (true) {
+    const results = await Promise.all(
+      ['tsconfig.json', 'jsconfig.json', 'package.json'].map(async name => {
+        const candidate = vscode.Uri.joinPath(dir, name);
+        return (await isFile(candidate)) ? candidate : undefined;
+      })
+    );
+    const hit = results.find(Boolean);
+    if (hit) return dir;
+
+    const parent = dirname(dir);
+    if (parent.toString() === dir.toString()) break;
+    dir = parent;
+  }
+  return undefined;
+}
+
 /** 取当前文件对应的别名上下文：向上找最近配置并解析，带 TTL 缓存（含"未找到"负缓存） */
 export async function getAliasContext(documentUri: vscode.Uri): Promise<AliasContext | undefined> {
   const dirKey = dirname(documentUri).toString();

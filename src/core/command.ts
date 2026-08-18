@@ -1,3 +1,6 @@
+/**
+ * 命令注册中心：统一包装所有命令，异常捕获并提示用户。
+ */
 import * as vscode from 'vscode';
 
 type CommandHandler = (...args: any[]) => unknown;

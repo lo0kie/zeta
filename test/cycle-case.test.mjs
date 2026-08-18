@@ -188,3 +188,45 @@ test('cycleCase: 单字符小写字母在 Constant Case 下有变化则应用', 
     cleanup(ws);
   }
 });
+
+test('cycleCase: 无任何选区时直接返回不编辑', async () => {
+  const ws = makeWorkspace();
+  setConfig({ 'zeta.case.cycleOrder': ['Camel Case', 'Kebab Case'] });
+  try {
+    const doc = makeDocument('fooBar x', join(ws, 'cc4.ts'), 'typescript');
+    const editor = editorWith(doc, []);
+    globalThis.__lastApply = null;
+    await cycleCase(editor);
+    assert.equal(globalThis.__lastApply, null);
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('cycleCase: 配置 cycleOrder 为空时不编辑', async () => {
+  const ws = makeWorkspace();
+  setConfig({ 'zeta.case.cycleOrder': [] });
+  try {
+    const doc = makeDocument('fooBar x', join(ws, 'cc5.ts'), 'typescript');
+    const editor = editorWith(doc, new Selection(new Position(0, 0), new Position(0, 6)));
+    globalThis.__lastApply = null;
+    await cycleCase(editor);
+    assert.equal(globalThis.__lastApply, null);
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('cycleCase: 选区仅为空白时不编辑', async () => {
+  const ws = makeWorkspace();
+  setConfig({ 'zeta.case.cycleOrder': ['Camel Case', 'Kebab Case'] });
+  try {
+    const doc = makeDocument('   x', join(ws, 'cc6.ts'), 'typescript');
+    const editor = editorWith(doc, new Selection(new Position(0, 0), new Position(0, 3)));
+    globalThis.__lastApply = null;
+    await cycleCase(editor);
+    assert.equal(globalThis.__lastApply, null);
+  } finally {
+    cleanup(ws);
+  }
+});

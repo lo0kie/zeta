@@ -14,6 +14,13 @@ class Uri {
   static joinPath(base, ...segs) {
     return new Uri(nodePath.join(base.fsPath, ...segs));
   }
+  // 对应 vscode.Uri.with：返回新实例，原实例不变（当前只用到 scheme 替换，fsPath 保持）
+  with(changes = {}) {
+    const uri = new Uri(this.fsPath);
+    if (changes.scheme !== undefined) uri.scheme = changes.scheme;
+    if (changes.path !== undefined) uri.path = changes.path;
+    return uri;
+  }
   toString() {
     return 'file://' + this.path;
   }
@@ -23,6 +30,13 @@ class Location {
   constructor(uri, rangeOrPosition) {
     this.uri = uri;
     this.range = rangeOrPosition;
+  }
+}
+
+class DocumentLink {
+  constructor(range, target) {
+    this.range = range;
+    this.target = target;
   }
 }
 
@@ -121,6 +135,13 @@ class CompletionItem {
   }
 }
 
+class CompletionList {
+  constructor(items = [], isIncomplete = false) {
+    this.items = items;
+    this.isIncomplete = isIncomplete;
+  }
+}
+
 class SnippetString {
   constructor(value) {
     this.value = value;
@@ -186,6 +207,7 @@ module.exports = {
   ColorInformation,
   ColorPresentation,
   CompletionItem,
+  CompletionList,
   SnippetString,
   MarkdownString,
   Hover,
@@ -193,11 +215,13 @@ module.exports = {
   EventEmitter,
   WorkspaceEdit,
   Location,
+  DocumentLink,
   SemanticTokensLegend,
   SemanticTokensBuilder,
   CompletionItemKind: { File: 1, Folder: 2, Variable: 3, Function: 4, Color: 16 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
+  StatusBarAlignment: { Left: 1, Right: 2 },
   workspace: {
     fs: {
       stat: uri => {
@@ -256,6 +280,7 @@ module.exports = {
     registerColorProvider: () => ({ dispose() {} }),
     registerHoverProvider: () => ({ dispose() {} }),
     registerDefinitionProvider: () => ({ dispose() {} }),
+    registerDocumentLinkProvider: () => ({ dispose() {} }),
     registerDocumentSemanticTokensProvider: () => ({ dispose() {} }),
   },
   env: { openExternal: async () => true },

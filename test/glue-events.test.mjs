@@ -76,7 +76,7 @@ test('registerCommands: 注册表完整性', () => {
 
   try {
     const disposables = registerCommands({ explorerProvider: { refresh() {} } });
-    assert.equal(disposables.length, 17);
+    assert.equal(disposables.length, 19);
 
     const expectedCommands = [
       'zeta.editor.wrapTags',
@@ -87,6 +87,8 @@ test('registerCommands: 注册表完整性', () => {
       'zeta.editor.wrapIf',
       'zeta.editor.unwrapTags',
       'zeta.editor.cycleQuotes',
+      'zeta.editor.debugResolveImport',
+      'zeta.openResolvedImport',
       'zeta.folder.openInTerminal',
       'zeta.file.openInBrowser',
       'zeta.folder.openInWindow',

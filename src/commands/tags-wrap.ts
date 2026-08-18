@@ -1,17 +1,20 @@
-﻿import { Configuration } from '@/core/configuration';
+import { Configuration } from '@/core/configuration';
 import { TextEdit } from '@/utils/edits';
 import * as vscode from 'vscode';
 
 type OrderedEdit = TextEdit & { order: number };
 
+/** 转义 Snippet 保留字符，防止标签名/属性/原文中的 $、}、\ 破坏 Snippet 模板 */
 function escapeSnippetText(text: string): string {
   return text.replace(/[$}\\]/g, '\\$&');
 }
 
+/** 按出现顺序记录一次插入（order 用于同偏移量下的稳定排序） */
 function pushInsert(edits: OrderedEdit[], offset: number, text: string): void {
   edits.push({ start: offset, end: offset, text, order: edits.length });
 }
 
+/** 空行/光标在行首：直接在光标处插入一对空标签 */
 function handleEmptyLine(
   start: vscode.Position,
   openTag: string,
@@ -23,6 +26,7 @@ function handleEmptyLine(
   pushInsert(edits, offset, `${openTag}${closeTag}`);
 }
 
+/** 光标在行尾（行尾非空）：标签换行包裹——开标签+缩进插到行首，闭标签插到行尾 */
 function handleLastCharacter(
   document: vscode.TextDocument,
   selection: vscode.Selection,
@@ -43,6 +47,7 @@ function handleLastCharacter(
   pushInsert(edits, endOffset, `\n${space}${closeTag}`);
 }
 
+/** 单选区内包裹：开头插开标签、结尾插闭标签 */
 function handleSingleLine(
   selection: vscode.Selection,
   openTag: string,
@@ -55,6 +60,7 @@ function handleSingleLine(
   pushInsert(edits, offsetOf(end), closeTag);
 }
 
+/** 多行选区：开标签独立成行并按选区起点对齐缩进，闭标签挂在最后一行，中间各行整体加一级缩进 */
 function handleMultiLine(
   document: vscode.TextDocument,
   selection: vscode.Selection,
@@ -76,6 +82,7 @@ function handleMultiLine(
   const endOffset = offsetOf(end);
   pushInsert(edits, endOffset, `\n${fullLineSpace}${closeTag}`);
 
+  // 给选区内其余行（空行除外）加一级缩进
   const lastLineToIndent = end.character > 0 ? end.line : end.line - 1;
   for (let line = start.line + 1; line <= lastLineToIndent; line++) {
     if (!document.lineAt(line).range.isEmpty) {
@@ -84,6 +91,11 @@ function handleMultiLine(
   }
 }
 
+/**
+ * 插入标签：用配置的标签（默认 div）包裹所有选区。
+ * 空选区在行首插空标签、在行尾换行包裹整行；多选区 Tabstop 序号连续，支持 Tab 依次改名。
+ * 标签名与属性做 Snippet 转义，空白配置回退 div。
+ */
 export default async function tagsWrap(textEditor: vscode.TextEditor): Promise<void> {
   const { document, selections, options } = textEditor;
   if (selections.length === 0) return;
