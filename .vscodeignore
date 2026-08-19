@@ -1,16 +1,26 @@
-.vscode/**
+# 源码、测试与调试工程
 src/**
 test/**
 playground/**
-generate-all-code.mjs
-compress-images.mjs
-all_code.txt
-.readme-patch.cjs
+docs/**
+.vscode/**
+.workbuddy/**
+.codebuddy/**
+
+# 配置文件与脚手架
 .gitignore
+.prettierrc*
+.prettierignore
+tsconfig*.json
+vitest.config.*
+*.mjs
+*.ts
+*.mts
+
+# 包管理器与冗余依赖锁定
 pnpm-lock.yaml
 pnpm-workspace.yaml
-tsconfig.json
+
+# 临时生成文件与原始大资源
+all_code.txt
 public/raw-icon.png
-docs/
-.workbuddy/
-changelog.md

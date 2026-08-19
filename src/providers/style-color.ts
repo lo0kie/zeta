@@ -1,5 +1,21 @@
 import { TtlCache } from '@/core/ttl-cache';
-import { clampChannel, parseHexColor, parseHslColor, parseRgbColor, rgbToHsl } from '@/utils/color';
+import {
+  clampChannel,
+  parseHexColor,
+  parseHslColor,
+  parseHwbColor,
+  parseLabColor,
+  parseLchColor,
+  parseOklabColor,
+  parseOklchColor,
+  parseRgbColor,
+  rgbToHsl,
+  rgbToHwb,
+  rgbToLab,
+  rgbToLch,
+  rgbToOklab,
+  rgbToOklch,
+} from '@/utils/color';
 import { scanStringTokens } from '@/utils/quote';
 import * as vscode from 'vscode';
 
@@ -28,6 +44,31 @@ const HSL_PATTERN = new RegExp(
   'gi'
 );
 
+// CSS Color 4：hwb / lab / lch / oklab / oklch 均为空格分隔，可选 `/ alpha`。
+// 分量可带符号（lab/oklab 的 a/b 可为负），支持百分比。
+const COLOR4_NUMBER = String.raw`-?(?:\d+(?:\.\d+)?|\.\d+)%?`;
+
+const HWB_PATTERN = new RegExp(
+  String.raw`hwb\(\s*(${HUE_PATTERN})\s+(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s*(?:/\s*(${ALPHA_PATTERN})\s*)?\)`,
+  'gi'
+);
+const LAB_PATTERN = new RegExp(
+  String.raw`lab\(\s*(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s*(?:/\s*(${ALPHA_PATTERN})\s*)?\)`,
+  'gi'
+);
+const LCH_PATTERN = new RegExp(
+  String.raw`lch\(\s*(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s+(${HUE_PATTERN})\s*(?:/\s*(${ALPHA_PATTERN})\s*)?\)`,
+  'gi'
+);
+const OKLAB_PATTERN = new RegExp(
+  String.raw`oklab\(\s*(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s*(?:/\s*(${ALPHA_PATTERN})\s*)?\)`,
+  'gi'
+);
+const OKLCH_PATTERN = new RegExp(
+  String.raw`oklch\(\s*(${COLOR4_NUMBER})\s+(${COLOR4_NUMBER})\s+(${HUE_PATTERN})\s*(?:/\s*(${ALPHA_PATTERN})\s*)?\)`,
+  'gi'
+);
+
 /** 为 JS/TS/vue 字符串字面量中的 hex / rgb / hsl 色值提供色块与拾色器 */
 export class StyleColorProvider implements vscode.DocumentColorProvider {
   public provideDocumentColors(document: vscode.TextDocument): vscode.ColorInformation[] {
@@ -38,7 +79,7 @@ export class StyleColorProvider implements vscode.DocumentColorProvider {
     const text = document.getText();
 
     // 快速路径：全文无任何色值标记直接返回空
-    if (!/[#]|rgb|hsl/i.test(text)) {
+    if (!/[#]|rgb|hsl|hwb|lab|lch|oklab|oklch/i.test(text)) {
       colorResultCache.set(cacheKey, { version: document.version, colors: [] });
       return [];
     }
@@ -121,9 +162,53 @@ export class StyleColorProvider implements vscode.DocumentColorProvider {
         )
       );
     }
+
+    // CSS Color 4：hwb / lab / lch / oklab / oklch（空格分隔，可选 / alpha）
+    this.scanColor4(HWB_PATTERN, parseHwbColor, text, baseOffset, document, colors, seen);
+    this.scanColor4(LAB_PATTERN, parseLabColor, text, baseOffset, document, colors, seen);
+    this.scanColor4(LCH_PATTERN, parseLchColor, text, baseOffset, document, colors, seen);
+    this.scanColor4(OKLAB_PATTERN, parseOklabColor, text, baseOffset, document, colors, seen);
+    this.scanColor4(OKLCH_PATTERN, parseOklchColor, text, baseOffset, document, colors, seen);
   }
 
-  /** 拾色器确认时提供三种写回格式：hex / rgb(a) / hsl(a)（alpha<1 时带透明度） */
+  /** 扫描一种 CSS Color 4 格式并记录 ColorInformation（同区间去重） */
+  private scanColor4(
+    pattern: RegExp,
+    parse: (
+      p1: string,
+      p2: string,
+      p3: string,
+      alpha?: string
+    ) => { r: number; g: number; b: number; a: number } | null,
+    text: string,
+    baseOffset: number,
+    document: vscode.TextDocument,
+    colors: vscode.ColorInformation[],
+    seen: Set<string>
+  ): void {
+    let match: RegExpExecArray | null;
+    pattern.lastIndex = 0;
+    while ((match = pattern.exec(text)) !== null) {
+      const c = parse(match[1], match[2], match[3], match[4]);
+      if (!c) continue;
+      const start = baseOffset + match.index;
+      const end = start + match[0].length;
+      const key = `${start}-${end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      colors.push(
+        new vscode.ColorInformation(
+          new vscode.Range(document.positionAt(start), document.positionAt(end)),
+          new vscode.Color(c.r, c.g, c.b, c.a)
+        )
+      );
+    }
+  }
+
+  /**
+   * 拾色器确认时提供多种写回格式：hex / rgb(a) / hsl(a) / hwb / lab / lch / oklab / oklch
+   * （alpha<1 时 hex 带透明度、其余带 ` / a`）。
+   */
   public provideColorPresentations(
     color: vscode.Color,
     _context: { document: vscode.TextDocument; range: vscode.Range }
@@ -140,10 +225,16 @@ export class StyleColorProvider implements vscode.DocumentColorProvider {
     const [h, s, l] = rgbToHsl(color.red, color.green, color.blue);
     const hslStr = a < 1 ? `hsla(${h}, ${s}%, ${l}%, ${Number(a.toFixed(2))})` : `hsl(${h}, ${s}%, ${l}%)`;
 
+    const { red, green, blue } = color;
     return [
       new vscode.ColorPresentation(hexStr),
       new vscode.ColorPresentation(rgbStr),
       new vscode.ColorPresentation(hslStr),
+      new vscode.ColorPresentation(rgbToHwb(red, green, blue, a)),
+      new vscode.ColorPresentation(rgbToLab(red, green, blue, a)),
+      new vscode.ColorPresentation(rgbToLch(red, green, blue, a)),
+      new vscode.ColorPresentation(rgbToOklab(red, green, blue, a)),
+      new vscode.ColorPresentation(rgbToOklch(red, green, blue, a)),
     ];
   }
 }

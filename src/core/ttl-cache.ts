@@ -38,14 +38,7 @@ export class TtlCache<V> {
   set(key: string, value: V): void {
     this._map.delete(key);
     this._map.set(key, { value, time: Date.now() });
-    if (this._map.size > this._maxSize) {
-      this.cleanup();
-      while (this._map.size > this._maxSize) {
-        const oldest = this._map.keys().next().value;
-        if (oldest === undefined) break;
-        this._map.delete(oldest);
-      }
-    }
+    this.ensureCapacity();
   }
 
   /** 删除全部过期项 */
@@ -53,6 +46,17 @@ export class TtlCache<V> {
     const now = Date.now();
     for (const [key, entry] of this._map) {
       if (now - entry.time >= this._ttlMs) this._map.delete(key);
+    }
+  }
+
+  /** 保证容量不超上限：先清过期项，仍超则按 FIFO 淘汰最旧（Map 保插入序） */
+  private ensureCapacity(): void {
+    if (this._map.size <= this._maxSize) return;
+    this.cleanup();
+    while (this._map.size > this._maxSize) {
+      const oldest = this._map.keys().next().value;
+      if (oldest === undefined) break;
+      this._map.delete(oldest);
     }
   }
 

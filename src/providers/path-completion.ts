@@ -1,6 +1,6 @@
 import { Configuration } from '@/core/configuration';
 import { basename, dirname, statSafe } from '@/core/fs';
-import { resolveAliasCandidates } from '@/core/path-alias';
+import { findProjectRootUri, resolveAliasCandidates } from '@/core/path-alias';
 import { TtlCache } from '@/core/ttl-cache';
 import * as vscode from 'vscode';
 
@@ -27,15 +27,26 @@ const dirListCache = new TtlCache<[string, vscode.FileType][]>(DIR_LIST_CACHE_TT
 
 /** 读目录并缓存**完整**排序列表（隐藏文件按配置过滤）：不再截断，由调用方按输入前缀内存过滤 + 单次返回上限 */
 async function readDirectoryCached(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
-  const key = uri.toString();
+  const showHidden = Configuration.PATH_SHOW_HIDDEN;
+  // 将外部过滤状态纳入缓存指纹：避免 TTL 窗口内切换 zeta.path.showHiddenFiles 时
+  // 返回此前按旧配置过滤过的结果（缓存中毒）
+  const key = `${uri.toString()}::hidden=${showHidden}`;
   const cached = dirListCache.get(key);
   if (cached) return cached;
 
-  const showHidden = Configuration.PATH_SHOW_HIDDEN;
-  const entries = await vscode.workspace.fs.readDirectory(uri);
+  let entries: [string, vscode.FileType][];
+  try {
+    entries = await vscode.workspace.fs.readDirectory(uri);
+  } catch (error) {
+    // 目录不可读（权限/已删除）时告警并透传，由 provideCompletionItems 兜底返回 undefined，
+    // 避免完全静默导致排障困难（旧实现直接抛给上层 catch，无任何日志）。
+    console.warn(`[zeta] 读取目录失败: ${uri.fsPath}`, error);
+    throw error;
+  }
   const visibleEntries = entries.filter(([name]) => showHidden || !name.startsWith('.'));
+  // 目录优先排序：目录排前、文件排后，同级保持原相对顺序（stable sort）
   const sorted = [...visibleEntries].sort(
-    (a, b) => (b[1] === vscode.FileType.Directory ? 1 : 0) - (a[1] === vscode.FileType.Directory ? 1 : 0)
+    (a, b) => Number(b[1] === vscode.FileType.Directory) - Number(a[1] === vscode.FileType.Directory)
   );
   dirListCache.set(key, sorted);
   return sorted;
@@ -62,7 +73,8 @@ export class PathCompletionProvider implements vscode.CompletionItemProvider {
 
     // 前缀过滤：只看「最后一个 / 之后」的输入片段，大小写不敏感
     const lastSlashIndex = rawPath.lastIndexOf('/');
-    const searchPrefix = lastSlashIndex !== -1 ? rawPath.slice(lastSlashIndex + 1).toLowerCase() : rawPath.toLowerCase();
+    const searchPrefix =
+      lastSlashIndex !== -1 ? rawPath.slice(lastSlashIndex + 1).toLowerCase() : rawPath.toLowerCase();
     const replaceStart = position.translate(0, -(rawPath.length - lastSlashIndex - 1));
     const replaceRange = new vscode.Range(replaceStart, position);
 
@@ -131,10 +143,13 @@ export class PathCompletionProvider implements vscode.CompletionItemProvider {
       }
       if (!rawPath.startsWith('@/')) return undefined;
 
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-      if (!workspaceFolder) return undefined;
+      // 优先工作区文件夹；单文件打开（无 workspace folder）时回落到最近的
+      // tsconfig/jsconfig/package.json 目录，与 path-definition 的跳转兜底能力对齐。
+      const baseUri =
+        vscode.workspace.getWorkspaceFolder(document.uri)?.uri ?? (await findProjectRootUri(document.uri));
+      if (!baseUri) return undefined;
       const subPath = searchDir.replace(/^@\/?/, '');
-      return vscode.Uri.joinPath(workspaceFolder.uri, 'src', subPath);
+      return vscode.Uri.joinPath(baseUri, 'src', subPath);
     }
 
     // 绝对 / 与 ~/：浏览「最后一个 / 之前」的目录，无子路径时回到工作区根

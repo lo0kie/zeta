@@ -20,7 +20,7 @@ const PLACEHOLDER_NODE: IExplorerNode = {
 };
 
 /**
- * 资源导航树：展示 zeta.list.folders 配置的目录（支持拖拽添加、目录/文件展开打开）。
+ * 资源导航树：展示 zeta.list.folders 配置的目录（目录/文件展开打开）。
  * 子节点按目录优先排序，读盘结果带 2s TTL 缓存。
  */
 export class ExplorerTreeViewProvider
@@ -29,7 +29,9 @@ export class ExplorerTreeViewProvider
   private _onDidChangeTreeData = new vscode.EventEmitter<IExplorerNode | void>();
   public readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  // 只接受外部拖入（text/uri-list），自身不可拖出
+  // 接受外部拖入（text/uri-list）。注意：VS Code 拖放 mime 无法区分文件/目录，
+  // 拖入文件也会显示「可放置」反馈——此时在 handleDrop 里明确提示「仅支持文件夹」，
+  // 避免「有反馈却不添加」的静默困惑。
   public dropMimeTypes = ['text/uri-list'];
   public dragMimeTypes: string[] = [];
 
@@ -56,7 +58,7 @@ export class ExplorerTreeViewProvider
 
   public handleDrag(): void {}
 
-  /** 接受系统/工作区拖入的目录，过滤出目录后写入配置（isDirectory 并发校验，避免串行 stat 卡顿） */
+  /** 接受拖入：目录写入配置；文件明确提示拒绝（isDirectory 并发校验，避免串行 stat 卡顿） */
   public async handleDrop(_target: IExplorerNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
     const uriList = await dataTransfer.get('text/uri-list')?.asString();
     if (!uriList) return;
@@ -64,8 +66,17 @@ export class ExplorerTreeViewProvider
     const uris = parseUriList(uriList);
     const checkResults = await Promise.all(uris.map(async uri => ({ uri, isDir: await isDirectory(uri) })));
     const directories = checkResults.filter(r => r.isDir).map(r => r.uri);
+    const fileCount = checkResults.length - directories.length;
 
-    await appendConfiguredFolders(directories);
+    if (fileCount > 0) {
+      await vscode.window.showWarningMessage(
+        fileCount === 1 ? '仅支持拖入文件夹，已忽略 1 个文件' : `仅支持拖入文件夹，已忽略 ${fileCount} 个文件`
+      );
+    }
+
+    if (directories.length > 0) {
+      await appendConfiguredFolders(directories);
+    }
   }
 
   /** 按 zeta.list.filterFolders 编译「目录名精确匹配」过滤正则（惰性构建） */

@@ -26,7 +26,9 @@ export async function debugResolveImport(textEditor: vscode.TextEditor): Promise
 
   const header = `光标路径: ${found.rawPath} | 工作区: ${workspaceFolder?.uri.fsPath ?? '无'}`;
   if (targets.length === 0) {
-    vscode.window.showInformationMessage(`${header} | 未解析到任何真实文件（检查 tsconfig paths 的 @/* 与文件是否在 src/ 下）`);
+    vscode.window.showInformationMessage(
+      `${header} | 未解析到任何真实文件（检查 tsconfig paths 的 @/* 与文件是否在 src/ 下）`
+    );
     return;
   }
   const list = targets.map(t => `  ${t.fsPath}`).join('\n');

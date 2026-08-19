@@ -19,30 +19,38 @@ const EXTERNAL_RE = /^(?:https?:|data:|file:|\/\/)/i;
  * 直接打开目标文件，不经定义结果合并，可彻底规避该问题。
  */
 export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
+  // 链接列表按文档版本缓存：编辑过程中 provideDocumentLinks 被反复请求（每次光标移动），
+  // 同版本直接返回，避免每条 import 重复走 resolveImportFileTargets 的 stat 探测。
+  private _linksCache = new Map<string, { version: number; links: vscode.DocumentLink[] }>();
+
   public async provideDocumentLinks(
     document: vscode.TextDocument,
     _token: vscode.CancellationToken
   ): Promise<vscode.DocumentLink[]> {
-    const links: vscode.DocumentLink[] = [];
+    const cacheKey = document.uri.toString();
+    const cached = this._linksCache.get(cacheKey);
+    if (cached && cached.version === document.version) return cached.links;
+
     const lineCount = document.lineCount;
 
+    // 先同步收集全部匹配（保持行序），再 Promise.all 并行 resolve（每条都会触发 stat 探测，
+    // 串行 await 会按 N 倍放大首次渲染延迟；probe-cache 已在缓存命中时免读盘）
+    const matches: { line: number; m: RegExpExecArray }[] = [];
     for (let line = 0; line < lineCount; line++) {
       const text = document.lineAt(line).text;
 
       STYLE_IMPORT_RE.lastIndex = 0;
       let m: RegExpExecArray | null;
-      while ((m = STYLE_IMPORT_RE.exec(text)) !== null) {
-        const link = await this.linkForMatch(document, line, text, m);
-        if (link) links.push(link);
-      }
+      while ((m = STYLE_IMPORT_RE.exec(text)) !== null) matches.push({ line, m });
 
       STYLE_URL_RE.lastIndex = 0;
-      while ((m = STYLE_URL_RE.exec(text)) !== null) {
-        const link = await this.linkForMatch(document, line, text, m);
-        if (link) links.push(link);
-      }
+      while ((m = STYLE_URL_RE.exec(text)) !== null) matches.push({ line, m });
     }
 
+    const resolved = await Promise.all(matches.map(({ line, m }) => this.linkForMatch(document, line, m)));
+    const links = resolved.filter((link): link is vscode.DocumentLink => link !== undefined);
+
+    this._linksCache.set(cacheKey, { version: document.version, links });
     return links;
   }
 
@@ -50,7 +58,6 @@ export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
   private async linkForMatch(
     document: vscode.TextDocument,
     line: number,
-    text: string,
     m: RegExpExecArray
   ): Promise<vscode.DocumentLink | undefined> {
     const rawPath = m[2].trim();

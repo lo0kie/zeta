@@ -2,6 +2,27 @@
 
 本文件自 1.5.0 起维护。1.5.1 起的修复随版本累积记录；1.5.0 的修复见下方。更早版本的功能与修复见 README 与 git 历史。
 
+## [1.6.0] - 2026-08-19
+
+### 新增
+
+- **选中当前块**（`zeta.editor.selectBlock`）：光标位于某括号块内时，选中该块内容（不含括号本身）。按「最近括号」策略在 `()` / `[]` / `{}` 中取包含光标的最内层一对；支持混合嵌套、多光标去重；字符串 / 正则 / 注释内的括号不参与配对。Vue 动态属性（`:class="[...]"` 等）的值是 JS 表达式，其内部的 `[]` / `{}` / `()` 可正常选中，仅属性值里的字符串字面量按字符串处理。
+
+### 变更
+
+- 颜色系统接入 [culori](https://culorijs.org/)：颜色补全 / 悬浮 / 转换支持 CSS Color 4 全格式（`hwb` / `lab` / `lch` / `oklab` / `oklch` / `color()` / `rgb(...)` 等），不再局限于 hex/rgb/hsl。类型改用官方 `@types/culori`（4.x，与 culori v4 匹配），移除手写 `declare module` 声明。
+- 样式悬浮与补全的展示统一（`src/providers/style-markdown.ts` 共享渲染）：变量与 mixin 以代码块展示「定义的样子」（`scope name: value;`），代码块语言 id 跟随来源文件（less/scss/css）；多个命名空间（`:root` / `.dark` 等）全部展示。纯色变量在代码块下方追加色块预览行（`![](...)` + 色值），色块之间真正换行；阴影/渐变等含颜色片段但整体非纯色的复杂值不误渲染色块。
+- `.gitignore` 精简为精准匹配当前工作文件的规则，移除无关脚手架模板与重复项。
+
+### 测试（开发基础设施，无运行时变更、不涉及版本号）
+
+- 测试文件全量纳入 `tsc --noEmit` 类型检查并清零（此前 122 处错误）：`helpers.ts` 新增 `hoverText` / `noopToken` / `noopEdit` 助手；shim 的 `getConfiguration().update` 改为写入注入配置（此前为 noop，`appendConfiguredFolders` 等回读类用例无法通过）；16+ 个测试文件的 mock 类型与断言规范化（无 `any`、无对 vscode API 直接赋值）
+- Vitest 并发执行：`maxWorkers` 由 1 提升至 8（32 核实测，全量 25.6s → 9.1s；16 会拖垮性能基准，故取 8）
+- 测试套件精简：经多轮审查由 259 项收敛至 222 项日常 + 4 项性能——删除跨文件逐字重复（cycleQuotes 等）、碎片化重复用例与未调用死代码（`makeChecker` / `linkInfo`），合并同构用例（splitWords、变量悬浮、resolveImportUri、appendConfiguredFolders 去重等）
+- 断言质量：恒真弱断言（`Array.isArray(x) || x`）改为明确断言；`activate` 订阅数由 `>= 8` 改为精确计数 `17 + 21 + 1`；命令注册数 `21` 改为以 `expectedCommands` 为单一数据源；`normSep` 重复实现改为复用 helpers 导入；`||` 兼容两种结果的模糊断言改为按索引精确断言
+- 性能基准分离：`performance.test.ts` 从日常全量排除（挂钟断言在 CI / 共享 runner 上有抖动风险），新增 `pnpm test:perf` 独立运行（`vitest.perf.config.mts`，继承主配置）
+- 新增补盲测试：`registerTextEditorCommand` 异常捕获、`Editor.apply()` 失败提示、`activate` 的 `setContext('zeta.htmlId', [...])` 参数断言、QuickPick ESC 取消不执行命令
+
 ## [1.5.2] - 2026-08-18
 
 ### 新增

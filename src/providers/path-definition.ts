@@ -1,6 +1,7 @@
 import { Configuration } from '@/core/configuration';
 import { dirname, isFile } from '@/core/fs';
 import { findProjectRootUri, resolveAliasCandidates } from '@/core/path-alias';
+import { getCachedProbe, probeKey, setCachedProbe } from '@/core/probe-cache';
 import * as vscode from 'vscode';
 
 // 支持触发路径跳转的文件类型（DefinitionProvider 与 ImportHoverProvider 共用）
@@ -66,10 +67,7 @@ export function extractImportString(
  *
  * 供 PathDefinitionProvider（F12/Ctrl+点击）与 StyleImportLinkProvider（样式 @import 链接）共用。
  */
-export async function resolveImportFileTargets(
-  document: vscode.TextDocument,
-  rawPath: string
-): Promise<vscode.Uri[]> {
+export async function resolveImportFileTargets(document: vscode.TextDocument, rawPath: string): Promise<vscode.Uri[]> {
   const candidates: vscode.Uri[] = [];
   const currentDir = dirname(document.uri);
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
@@ -107,6 +105,13 @@ export async function resolveImportFileTargets(
   const knownExtList = getExtensionCandidates();
   const knownExts = new Set(knownExtList);
   const indexCandidates = getIndexCandidates();
+
+  // 2.5 解析结果 TTL 缓存（含空结果负缓存）：扩展名配置指纹纳入 key，
+  //     自定义 zeta.path.extensions 变化时不会复用旧探测结果
+  const cacheKey = probeKey(document.uri, rawPath, knownExtList.join(','));
+  const cached = getCachedProbe(cacheKey);
+  if (cached) return [...cached];
+
   const seen = new Set<string>();
   const probePaths: string[] = [];
   const probeTasks: Promise<boolean>[] = [];
@@ -154,6 +159,7 @@ export async function resolveImportFileTargets(
     if (existsList[i]) results.push(vscode.Uri.file(targetPath));
   });
 
+  setCachedProbe(cacheKey, results);
   return results;
 }
 
@@ -174,12 +180,15 @@ export class PathDefinitionProvider implements vscode.DefinitionProvider {
     // 不依赖 VS Code 内置 TS 语言服务（用户可能未配置 TS）；同名不同后缀的多个
     // 文件 VS Code 的 F12 会在多个结果间切换，因此无需替用户挑选其一。
     const targetRange = new vscode.Range(0, 0, 0, 0);
-    return targets.map(targetUri => ({
-      targetUri,
-      targetRange,
-      targetSelectionRange: targetRange,
-      originSelectionRange: stringRange,
-    }) satisfies vscode.LocationLink);
+    return targets.map(
+      targetUri =>
+        ({
+          targetUri,
+          targetRange,
+          targetSelectionRange: targetRange,
+          originSelectionRange: stringRange,
+        }) satisfies vscode.LocationLink
+    );
   }
 }
 

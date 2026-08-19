@@ -83,6 +83,64 @@ export function remapOffset(offset: number, edits: TextEdit[]): number {
   return result;
 }
 
+/** 选区重映射记录：用于编辑后按最终文本重算选区位置 */
+export interface SelectionRecord {
+  start: number;
+  end: number;
+  isEmpty: boolean;
+  /** 选区方向：true 表示反向（anchor > active，即「向左选择」）；默认正向 */
+  reversed?: boolean;
+  /** 光标/选区起点相对「编辑起点」的偏移（编辑后映射回新文本，夹在长度内） */
+  relativeOffset?: number;
+  /** 非空选区终点相对「编辑起点」的偏移（relativeOffset 表示起点时使用） */
+  relativeEnd?: number;
+  /** 对应编辑的起点（从 edits 中查找该编辑以取新文本长度） */
+  replaceStart?: number;
+  /** 原编辑范围长度（对应编辑缺失时兜底） */
+  replaceLength?: number;
+}
+
+/**
+ * 按「编辑前文本 + 编辑列表」重算所有选区在最终文本中的位置，并保持选区方向
+ * （正向/反向不变——vscode.Selection(anchor, active) 的参数顺序决定方向）。
+ * - 若记录了 relativeOffset（+可选 relativeEnd）与 replaceStart：映射到新文本内同相对区间
+ *   （夹在替换长度内）。空光标相对区间为零长；非空选区选中了替换内部的一部分时，
+ *   用 remapOffset 会把选区起点/终点都钳制到替换末尾——必须走相对映射保持选区内容。
+ * - 否则按 remapOffset 的位移规则映射（落在替换内部时钳制到替换末尾）。
+ */
+export function remapSelections(
+  originalText: string,
+  edits: TextEdit[],
+  records: SelectionRecord[]
+): vscode.Selection[] {
+  const finalText = buildFinalText(originalText, edits);
+  // 预建「编辑起点 → 编辑」索引，避免每条记录都线性 find（编辑多时 O(n·m)）
+  const editByStart = new Map<number, TextEdit>(edits.map(e => [e.start, e]));
+  return records.map(record => {
+    // 按方向构造：reversed 时 anchor 在后（大偏移）、active 在前（小偏移）
+    const makeSelection = (a: vscode.Position, b: vscode.Position) =>
+      record.reversed ? new vscode.Selection(b, a) : new vscode.Selection(a, b);
+
+    if (record.relativeOffset !== undefined && record.replaceStart !== undefined) {
+      const matchedEdit = editByStart.get(record.replaceStart);
+      const mappedStart = remapOffset(record.replaceStart, edits);
+      const newLength = matchedEdit ? matchedEdit.text.length : (record.replaceLength ?? 0);
+      const newStart = mappedStart + Math.min(record.relativeOffset, newLength);
+      const endRel = record.relativeEnd ?? record.relativeOffset;
+      const newEnd = mappedStart + Math.min(endRel, newLength);
+      return makeSelection(positionAt(finalText, newStart), positionAt(finalText, newEnd));
+    }
+    if (record.isEmpty) {
+      const endPos = positionAt(finalText, remapOffset(record.end, edits));
+      return new vscode.Selection(endPos, endPos);
+    }
+    return makeSelection(
+      positionAt(finalText, remapOffset(record.start, edits)),
+      positionAt(finalText, remapOffset(record.end, edits))
+    );
+  });
+}
+
 /** 把最终文本偏移换算成 Position（text 为 buildFinalText 的产物）；越界钳制，用原生 indexOf 跳跃数换行 */
 export function positionAt(text: string, offset: number): vscode.Position {
   const validOffset = Math.max(0, Math.min(offset, text.length));

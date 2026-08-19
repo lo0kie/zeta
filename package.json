@@ -1,9 +1,9 @@
 {
   "name": "lookie-zeta",
   "displayName": "zeta",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "icon": "./public/icon.png",
-  "description": "开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全与跳转、颜色编辑、脚本运行。零运行时依赖、无遥测。",
+  "description": "开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全与跳转、颜色编辑、脚本运行。无遥测、纯本地处理。",
   "categories": [
     "Other"
   ],
@@ -28,13 +28,18 @@
   "publisher": "lookie",
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsup src/index.ts --watch --external vscode",
-    "generate-code": "node ./generate-all-code.mjs",
+    "dev": "tsup --watch",
+    "build": "tsup",
     "prepackage": "node ./compress-images.mjs",
-    "build": "tsup src/index.ts --minify --external vscode",
-    "package": "pnpm build && vsce package --no-dependencies",
-    "test": "node --test --test-concurrency=1 \"test/*.test.mjs\"",
-    "format": "prettier \"src/**/*.{js,ts}\" -w -u --cache"
+    "vscode:prepublish": "pnpm build",
+    "package": "vsce package --no-dependencies",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:perf": "vitest run -c vitest.perf.config.mts",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier \"src/**/*.{js,ts,vue}\" \"test/**/*.{js,ts}\" -w --cache",
+    "format:check": "prettier \"src/**/*.{js,ts,vue}\" \"test/**/*.{js,ts}\" --check --cache",
+    "generate-code": "node ./generate-all-code.mjs"
   },
   "contributes": {
     "commands": [
@@ -135,6 +140,21 @@
       {
         "command": "zeta.editor.debugResolveImport",
         "title": "调试导入解析",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.selectString",
+        "title": "选中当前字符串",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.editor.selectBlock",
+        "title": "选中当前块",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.showCommands",
+        "title": "显示全部命令",
         "category": "zeta"
       },
       {
@@ -285,12 +305,17 @@
       {
         "key": "alt+shift+e",
         "command": "zeta.editor.changeCase",
-        "when": "editorHasSelection && !editorReadonly"
+        "when": "editorHasSelection && !editorReadonly && !zeta.caseDisabled"
       },
       {
         "key": "alt+shift+c",
         "command": "zeta.editor.cycleCase",
-        "when": "editorIsOpen && !editorReadonly && editorHasSelection"
+        "when": "editorIsOpen && !editorReadonly && editorHasSelection && !zeta.caseDisabled"
+      },
+      {
+        "key": "alt+shift+s",
+        "command": "zeta.editor.selectString",
+        "when": "editorTextFocus && !editorReadonly"
       }
     ],
     "menus": {
@@ -328,7 +353,7 @@
           "when": "view == zeta-explorer && viewItem =~ /^directory-/"
         },
         {
-          "command": "zeta.folder.openInNewWindow",
+          "command": "zeta.folder.openInTerminal",
           "group": "navigation@0",
           "when": "view == zeta-explorer && viewItem =~ /^directory-/"
         },
@@ -338,8 +363,13 @@
           "when": "view == zeta-explorer && viewItem =~ /^directory-/"
         },
         {
-          "command": "zeta.explorer.removeFolder",
+          "command": "zeta.folder.openInNewWindow",
           "group": "navigation@2",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.removeFolder",
+          "group": "navigation@3",
           "when": "view == zeta-explorer && viewItem =~ /^directory-root-/"
         }
       ],
@@ -387,7 +417,7 @@
         },
         {
           "command": "zeta.editor.changeCase",
-          "when": "editorHasSelection && !editorReadonly"
+          "when": "editorHasSelection && !editorReadonly && !zeta.caseDisabled"
         },
         {
           "command": "zeta.folder.runScript",
@@ -415,7 +445,7 @@
         },
         {
           "command": "zeta.editor.cycleCase",
-          "when": "editorIsOpen && !editorReadonly && editorHasSelection"
+          "when": "editorIsOpen && !editorReadonly && editorHasSelection && !zeta.caseDisabled"
         },
         {
           "command": "zeta.editor.wrapConsole",
@@ -435,11 +465,15 @@
         },
         {
           "command": "zeta.editor.cycleQuotes",
-          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly"
+          "when": "editorIsOpen && editorLangId =~ /^(vue|javascript|typescript|javascriptreact|typescriptreact)$/ && !editorReadonly && !zeta.caseDisabled"
         },
         {
           "command": "zeta.editor.debugResolveImport",
           "when": "editorIsOpen && editorLangId =~ /^(javascript|typescript|javascriptreact|typescriptreact|vue|html|css|less|scss|sass|stylus|json)$/"
+        },
+        {
+          "command": "zeta.editor.selectString",
+          "when": "editorIsOpen && !editorReadonly"
         }
       ]
     },
@@ -463,50 +497,26 @@
           "icon": "$(root-folder)"
         }
       ]
-    },
-    "semanticTokenScopes": [
-      {
-        "language": "css",
-        "scopes": {
-          "variable": [
-            "variable.other.readwrite.js",
-            "variable"
-          ]
-        }
-      },
-      {
-        "language": "less",
-        "scopes": {
-          "variable": [
-            "variable.other.readwrite.js",
-            "variable"
-          ]
-        }
-      },
-      {
-        "language": "scss",
-        "scopes": {
-          "variable": [
-            "variable.other.readwrite.js",
-            "variable"
-          ]
-        }
-      },
-      {
-        "language": "vue",
-        "scopes": {
-          "variable": [
-            "variable.other.readwrite.js",
-            "variable"
-          ]
-        }
-      }
-    ]
+    }
   },
   "activationEvents": [
-    "onStartupFinished"
+    "onLanguage:less",
+    "onLanguage:css",
+    "onLanguage:scss",
+    "onLanguage:sass",
+    "onLanguage:stylus",
+    "onLanguage:styluslang",
+    "onLanguage:vue",
+    "onLanguage:html",
+    "onLanguage:htm",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescriptreact",
+    "onLanguage:json"
   ],
   "devDependencies": {
+    "@types/culori": "4.0.1",
     "@types/node": "20",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.9.2",
@@ -514,9 +524,13 @@
     "prettier": "^3.2.4",
     "sharp": "^0.35.3",
     "tsup": "^8.0.1",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.10"
   },
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "dependencies": {
+    "culori": "^4.0.2"
   }
 }

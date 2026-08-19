@@ -8,6 +8,8 @@ export interface StringToken {
   end: number;
   quote: string;
   isAttrQuote?: boolean;
+  /** Vue 动态属性（:class/:style/@click 等）：值为 JS 表达式，内部的括号（[]/{}/( )）仍需配对 */
+  isDynamicAttr?: boolean;
   isObjectKey?: boolean;
   enclosingQuote?: string;
 }
@@ -222,6 +224,7 @@ export function scanStringTokens(text: string): StringToken[] {
           end: i + 1,
           quote: current.attrQuote!,
           isAttrQuote: true,
+          isDynamicAttr: true,
         });
         stack.pop();
         i++;

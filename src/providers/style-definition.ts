@@ -1,15 +1,16 @@
 import { escapeRegExp } from '@/core/strings';
-import {
-  collectImportedFiles,
-  collectImportedSymbols,
-  getStyleBlocks,
-  readFileTextCached,
-} from '@/providers/style-completion';
+import { collectImportedSymbols, getStyleBlocks } from '@/providers/style-completion';
+import { buildLineStarts, lineOf } from '@/utils/text';
 import * as vscode from 'vscode';
 import { STYLE_SYMBOL_LANGS } from './style-languages';
 
-// 可跳转的符号词形：类 .x / id #x / 变量 @x $x / CSS 变量 --x
-const DEF_WORD = /([.#@$][a-zA-Z0-9_-]+|--[a-zA-Z0-9_-]+)/;
+// re-export：历史导入路径兼容（test/performance.test.ts 从此处导入 buildLineStarts/lineOf），
+// 实现已统一到 @/utils/text。
+export { buildLineStarts, lineOf } from '@/utils/text';
+
+// 可跳转的符号词形：变量 @x $x / CSS 变量 --x / mixin（less .mixin-name、scss @mixin-name）。
+// 普通类/ID 跳转由内置 CSS 语言服务处理，这里不再处理 .class / #id。
+const DEF_WORD = /([.#@$][\w-\\]+|--[\w-\\]+)/;
 
 /** 找第一个定义位置（无匹配返回 undefined） */
 export function findDefinitionRange(text: string, word: string): vscode.Range | undefined {
@@ -44,26 +45,21 @@ export function findDefinitionRanges(text: string, word: string): vscode.Range[]
     return [];
   }
 
+  // 行偏移索引一次构建，行号换算由 O(match.index) 降为 O(log n)
+  const lineStarts = buildLineStarts(cleanText);
   const ranges: vscode.Range[] = [];
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(cleanText)) !== null) {
-    let line = 0;
-    let lastNewLine = -1;
-    // 换算当前绝对偏移对应的行号
-    for (let i = 0; i < match.index; i++) {
-      if (cleanText[i] === '\n') {
-        line++;
-        lastNewLine = i;
-      }
-    }
+    const line = lineOf(lineStarts, match.index);
+    const lineStart = lineStarts[line];
 
     // 定位到当前行的末尾，还原原始业务逻辑的 range 指向
     let lineEnd = cleanText.indexOf('\n', match.index);
     if (lineEnd === -1) lineEnd = cleanText.length;
     if (cleanText[lineEnd - 1] === '\r') lineEnd--;
 
-    const pos = new vscode.Position(line, lineEnd - (lastNewLine + 1));
+    const pos = new vscode.Position(line, lineEnd - lineStart);
     ranges.push(new vscode.Range(pos, pos));
   }
 
@@ -103,43 +99,45 @@ export class StyleDefinitionProvider implements vscode.DefinitionProvider {
 
     const locations: vscode.Location[] = [];
 
-    // 变量类（@ / $ / --）：从导入关系展开的符号表里找定义文件，再定位定义位置
+    // 变量类（@ / $ / --）：从导入关系展开的符号表里找定义位置——符号已带 offset/line，
+    // 直接定位（ParsedSymbol），不再对每个定义文件做 findDefinitionRanges 全文正则。
     if (word.startsWith('@') || word.startsWith('$') || word.startsWith('--')) {
       const symbols = await collectImportedSymbols(document);
       const matchedSymbols = symbols.filter(s => s.name === word);
       if (matchedSymbols.length === 0) return undefined;
 
-      const filePaths = Array.from(new Set(matchedSymbols.map(s => s.filePath)));
-      for (const filePath of filePaths) {
-        const targetUri = vscode.Uri.file(filePath);
-        try {
-          const targetText = await readFileTextCached(targetUri);
-          const ranges = findDefinitionRanges(targetText, word);
-          if (ranges.length > 0) {
-            for (const range of ranges) {
-              locations.push(new vscode.Location(targetUri, range));
-            }
-          } else {
-            locations.push(new vscode.Location(targetUri, new vscode.Position(0, 0)));
-          }
-        } catch {}
+      const seen = new Set<string>();
+      for (const s of matchedSymbols) {
+        const targetUri = vscode.Uri.file(s.filePath);
+        const key = `${s.filePath}:${s.line}`;
+        if (seen.has(key)) continue; // 同文件同行（如 @x 与 $x 同名场景）去重
+        seen.add(key);
+        // 显式 zero-length Range（Location 传 Position 时 shim 不转 Range，真机虽兼容但统一更稳）
+        const pos = new vscode.Position(s.line, s.lineEndCharacter);
+        locations.push(new vscode.Location(targetUri, new vscode.Range(pos, pos)));
       }
 
       if (locations.length === 0) return undefined;
       return locations.length === 1 ? locations[0] : locations;
     }
 
-    // 类 / ID：在本文件与全部导入文件中搜索定义
-    if (word.startsWith('.') || word.startsWith('#')) {
-      const files = [document.uri, ...(await collectImportedFiles(document))];
-      for (const uri of files) {
-        try {
-          const text = await readFileTextCached(uri);
-          const ranges = findDefinitionRanges(text, word);
-          for (const range of ranges) {
-            locations.push(new vscode.Location(uri, range));
-          }
-        } catch {}
+    // mixin：less `.mixin-name` 与 scss `@mixin-name` 都从符号表定位（mixin 不在 selectorDefs，
+    // 普通类/ID 跳转交给内置 CSS 语言服务，这里不再处理 .class / #id）。
+    if (word.startsWith('.') || word.startsWith('@')) {
+      const symbols = await collectImportedSymbols(document);
+      // 只匹配 mixin 符号（less kind='mixin'，scss kind='scss-mixin'）；
+      // 变量（kind='variable'/'css-variable'/'scss-variable'）在上面的 @ / $ / -- 分支已处理。
+      const matchedSymbols = symbols.filter(s => s.name === word && (s.kind === 'mixin' || s.kind === 'scss-mixin'));
+      if (matchedSymbols.length === 0) return undefined;
+
+      const seen = new Set<string>();
+      for (const s of matchedSymbols) {
+        const targetUri = vscode.Uri.file(s.filePath);
+        const key = `${s.filePath}:${s.line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const pos = new vscode.Position(s.line, s.lineEndCharacter);
+        locations.push(new vscode.Location(targetUri, new vscode.Range(pos, pos)));
       }
 
       if (locations.length === 0) return undefined;

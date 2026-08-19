@@ -73,11 +73,13 @@ function handleMultiLine(
   const { start, end } = selection;
   const { text } = document.lineAt(start.line);
   const [_, fullLineSpace = ''] = text.match(/^(\s*)\S/) || [];
-  const frontSpace = fullLineSpace.slice(0, start.character);
-  const behindSpace = fullLineSpace.slice(start.character);
 
-  const startOffset = offsetOf(start);
-  pushInsert(edits, startOffset, `${behindSpace}${openTag}\n${frontSpace}${tabSize}`);
+  // 开标签从 start 行行首开始插入，snippet 显式带完整前导缩进。
+  // 关键：spanRange 起点必须落在行首（而非 start 处）——VS Code 多行 snippet 会
+  // 把「插入位置之前所在行的空白」作为基准追加到 snippet 每一行（首行除外），
+  // 若起点在行中（如 < 前），原行前导会被二次叠加，导致整体缩进多出一级。
+  const lineStartOffset = offsetOf(new vscode.Position(start.line, 0));
+  pushInsert(edits, lineStartOffset, `${fullLineSpace}${openTag}\n${tabSize}`);
 
   const endOffset = offsetOf(end);
   pushInsert(edits, endOffset, `\n${fullLineSpace}${closeTag}`);
@@ -106,7 +108,10 @@ export default async function tagsWrap(textEditor: vscode.TextEditor): Promise<v
   const openName = cleanedName.split(/\s+/)[0] || 'div';
   // openName 不在原配置中（空白回退场景）时属性为空，避免 indexOf 返回 -1 后 slice 截出尾部残留
   const tagStart = tagName.indexOf(openName);
-  const restAttrs = tagStart >= 0 ? tagName.slice(tagStart + openName.length) : '';
+  // 属性部分：保留开标签名后的内容（含属性分隔用的前导空格，如 ' class="card"'）；
+  // 去掉尾部空白——配置若带尾随空格（如 "div "），snippet 里标签名后会多出空格，
+  // 选中标签名按 Tab 时会停在空格位置，干扰改名
+  const restAttrs = tagStart >= 0 ? tagName.slice(tagStart + openName.length).replace(/\s+$/, '') : '';
   const tabSize = options.insertSpaces ? ' '.repeat(Number(options.tabSize || 2)) : '\t';
   const originalText = document.getText();
   const offsetOf = (pos: vscode.Position) => document.offsetAt(pos);
@@ -121,9 +126,13 @@ export default async function tagsWrap(textEditor: vscode.TextEditor): Promise<v
     const { text, range } = document.lineAt(start.line);
 
     const isLastChar = isEmpty && start.character === range.end.character && text.trim().length > 0;
-    const tabIndex = index + 1;
-    const openTag = `<\${${tabIndex}:${escapeSnippetText(openName)}}${escapeSnippetText(restAttrs)}>`;
-    const closeTag = `</\$${tabIndex}>`;
+    // 每个选区占三个 Tabstop：标签名（可改名，闭标签同步）→ 属性输入位（标签名后空格处）→ 开标签 > 右侧内容位。
+    // Tab 顺序：$1 标签名 → $2 属性位 → $3 内容位 → $4 标签名 → $5 属性位 → $6 内容位 ……
+    const nameTab = index * 3 + 1;
+    const attrTab = index * 3 + 2;
+    const contentTab = index * 3 + 3;
+    const openTag = `<\${${nameTab}:${escapeSnippetText(openName)}}${escapeSnippetText(restAttrs)} \${${attrTab}}>\${${contentTab}}`;
+    const closeTag = `</\$${nameTab}>`;
 
     if (isEmpty) {
       if (isLastChar) {

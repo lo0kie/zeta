@@ -71,8 +71,8 @@ function getTargetRanges(textEditor: vscode.TextEditor, expandFull: boolean): vs
 }
 
 /**
- * 包裹 console.log：每个选区生成 `console.log(<内容>$N)`，N 为 Tabstop 序号（多选区连续 Tab 导航）。
- * 选区文本去掉首尾空白与多余分号，光标落在右括号前。
+ * 包裹 console.log：每个选区生成 `console.log(${N:内容}, ${N+1})`——Tab 先落在内容上
+ * （整体编辑/改名），再跳到逗号后的第二参数位继续输入。多选区 Tabstop 序号连续。
  */
 export async function wrapWithConsole(textEditor: vscode.TextEditor): Promise<void> {
   const { document } = textEditor;
@@ -91,9 +91,10 @@ export async function wrapWithConsole(textEditor: vscode.TextEditor): Promise<vo
     const baseIndent = range.start.character === 0 ? leadingIndent(document.lineAt(range.start.line).text) : '';
     const rawText = document.getText(range);
     const text = rawText.trim().replace(/;+$/, '');
-    const tabIndex = index + 1;
+    const contentTab = index * 2 + 1;
+    const secondTab = index * 2 + 2;
 
-    snippetText += `${baseIndent}console.log(${escapeSnippetText(text)}\$${tabIndex})`;
+    snippetText += `${baseIndent}console.log(\${${contentTab}:${escapeSnippetText(text)}}, \${${secondTab}})`;
     lastPos = range.end;
   });
 
@@ -134,7 +135,8 @@ export async function wrapWithTryCatch(textEditor: vscode.TextEditor): Promise<v
 }
 
 /**
- * 包裹 if：整行展开，body 统一缩进；Tabstop 依次为条件（默认 true）、body 内容。
+ * 包裹 if：整行展开，body 统一缩进；Tabstop 依次为条件（默认 true）、body 内容
+ * （body 作为占位符默认值，Tab 可整体选中编辑）。多选区 Tabstop 序号连续。
  */
 export async function wrapWithIf(textEditor: vscode.TextEditor): Promise<void> {
   const { document, options } = textEditor;
@@ -153,9 +155,10 @@ export async function wrapWithIf(textEditor: vscode.TextEditor): Promise<void> {
 
     const baseIndent = leadingIndent(document.lineAt(range.start.line).text);
     const body = indentBody(document.getText(range), unit);
-    const tabIndex = index + 1;
+    const tabCond = index * 2 + 1;
+    const tabBody = index * 2 + 2;
 
-    snippetText += `${baseIndent}if (\${${tabIndex}:true}) {\n${escapeSnippetText(body)}\n${baseIndent}}`;
+    snippetText += `${baseIndent}if (\${${tabCond}:true}) {\n\${${tabBody}:${escapeSnippetText(body)}}\n${baseIndent}}`;
     lastPos = range.end;
   });
 

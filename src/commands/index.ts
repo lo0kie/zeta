@@ -9,6 +9,9 @@ import cycleQuotes from './cycle-quotes';
 import { openFolder, openInDefaultBrowser } from './folder';
 import removeFolder from './remove-folder';
 import runScript from './run-script';
+import selectBlock from './select-block';
+import selectString from './select-string';
+import showCommands from './show-commands';
 import { debugResolveImport, openResolvedImport } from './style-import';
 import tagsWrap from './tags-wrap';
 import { runInTerminal, toggleTerminal } from './terminal';
@@ -32,6 +35,8 @@ export function registerCommands({ explorerProvider }: CommandDeps): vscode.Disp
     registerTextEditorCommand('zeta.editor.unwrapTags', unwrapTags),
     registerTextEditorCommand('zeta.editor.cycleQuotes', cycleQuotes),
     registerTextEditorCommand('zeta.editor.debugResolveImport', debugResolveImport),
+    registerTextEditorCommand('zeta.editor.selectBlock', selectBlock),
+    registerTextEditorCommand('zeta.editor.selectString', selectString),
 
     registerCommand('zeta.openResolvedImport', (uriString: string) => openResolvedImport(uriString)),
     registerCommand('zeta.folder.openInTerminal', arg => runInTerminal({ cwd: resolveUriArgument(arg) })),
@@ -43,5 +48,6 @@ export function registerCommands({ explorerProvider }: CommandDeps): vscode.Disp
     registerCommand('zeta.explorer.removeFolder', removeFolder),
     registerCommand('zeta.explorer.refresh', () => explorerProvider.refresh()),
     registerCommand('zeta.terminal.toggle', toggleTerminal),
+    registerCommand('zeta.showCommands', showCommands),
   ];
 }
