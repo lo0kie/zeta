@@ -123,6 +123,8 @@ export interface ParsedSymbol {
   kind: ParsedSymbolKind;
   filePath: string;
   scope?: string;
+  /** SCSS @use 命名空间别名（`@use 'x' as c` 的 c）：该变量只能经 `c.$var` 访问，非裸提示 */
+  namespace?: string;
   snippet?: string;
   /** 定义名起点（文件内绝对偏移） */
   offset: number;

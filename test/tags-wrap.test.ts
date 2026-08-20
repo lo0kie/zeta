@@ -1,6 +1,5 @@
-import { default as tagsWrap } from '@/commands/tags-wrap';
+import tagsWrap from '@/commands/tags-wrap';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test } from 'vitest';
 import * as vscode from 'vscode';
 import { editorWith, makeDocument, setConfig } from './helpers';
@@ -285,5 +284,43 @@ test('tagsWrap: 空白标签配置回退到 div', async () => {
     const ops = lastApply();
     assert.equal(ops.length, 1);
     assert.equal(ops[0].text, '<${1:div} ${2}>${3}content</$1>');
+  }
+});
+
+test('tagsWrap: Vue <script> 块内不触发（不插入 HTML 标签）', async () => {
+  setConfig({ 'zeta.string.tag': 'div' });
+  {
+    const text = `<template><div>hi</div></template>\n<script setup lang="ts">\nconst x = foo()\n</script>`;
+    const doc = makeDocument(text, '/virtual/v1.vue', 'vue');
+    const editor = editorWith(doc, new Selection(new Position(2, 5), new Position(2, 5)));
+    globalThis.__lastApply = null;
+    await tagsWrap(editor);
+    assert.equal(lastApply().length, 0, 'script 块内不插入标签');
+  }
+});
+
+test('tagsWrap: Vue <style> 块内不触发', async () => {
+  setConfig({ 'zeta.string.tag': 'div' });
+  {
+    const text = `<template><div>hi</div></template>\n<style scoped>.a { color: red; }</style>`;
+    const doc = makeDocument(text, '/virtual/v2.vue', 'vue');
+    const editor = editorWith(doc, new Selection(new Position(1, 12), new Position(1, 12)));
+    globalThis.__lastApply = null;
+    await tagsWrap(editor);
+    assert.equal(lastApply().length, 0, 'style 块内不插入标签');
+  }
+});
+
+test('tagsWrap: Vue <template> 块内正常触发', async () => {
+  setConfig({ 'zeta.string.tag': 'div' });
+  {
+    const text = `<template><span>hi</span></template>\n<script setup>const x = 1</script>`;
+    const doc = makeDocument(text, '/virtual/v3.vue', 'vue');
+    const editor = editorWith(doc, new Selection(new Position(0, 12), new Position(0, 12)));
+    globalThis.__lastApply = null;
+    await tagsWrap(editor);
+    const ops = lastApply();
+    assert.equal(ops.length, 1, 'template 块内正常触发');
+    assert.ok(ops[0].text.startsWith('<${1:div} ${2}>${3}'));
   }
 });

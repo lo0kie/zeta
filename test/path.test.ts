@@ -231,3 +231,29 @@ test('path-completion：showHiddenFiles 切换后目录缓存不中毒（指纹�
     cleanup(ws);
   }
 });
+
+// baseDir 可配置：无 tsconfig paths 时 @/ 兜底目录不再写死 src，可由 zeta.path.baseDir 覆盖（如 lib/）。
+test('path-completion：@/ 兜底目录走 zeta.path.baseDir（非硬编码 src）', async () => {
+  const ws = makeWorkspace();
+  // 无 tsconfig paths，baseDir 配成 lib
+  setConfig({ 'zeta.path.baseDir': 'lib' });
+  try {
+    mkdirSync(join(ws, 'lib'), { recursive: true });
+    writeFileSync(join(ws, 'lib', 'util.ts'), '');
+    writeFileSync(join(ws, 'lib', 'api.ts'), '');
+
+    const doc = makeDocument("import x from '@/", join(ws, 'main.ts'), 'typescript');
+    const provider = new PathCompletionProvider();
+    const items = unwrapItems(await provider.provideCompletionItems(doc, new Position(0, 18)));
+    assert.ok(
+      items.some(i => i.label === 'util.ts'),
+      'lib 目录下的文件被列出'
+    );
+    assert.ok(
+      items.some(i => i.label === 'api.ts'),
+      'lib 目录下的文件被列出'
+    );
+  } finally {
+    cleanup(ws);
+  }
+});

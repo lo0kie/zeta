@@ -1,4 +1,4 @@
-import { collectZetaCommands, default as showCommands } from '@/commands/show-commands';
+import showCommands, { collectZetaCommands } from '@/commands/show-commands';
 import assert from 'node:assert/strict';
 import { test, vi } from 'vitest';
 import * as vscode from 'vscode';

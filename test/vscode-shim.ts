@@ -162,7 +162,19 @@ export class ColorInformation {
 }
 
 export class ColorPresentation {
+  public additionalTextEdits?: TextEdit[];
+  public textEdit?: TextEdit;
   constructor(public label: string) {}
+}
+
+export class TextEdit {
+  constructor(
+    public range: Range,
+    public newText: string
+  ) {}
+  static replace(range: Range, newText: string): TextEdit {
+    return new TextEdit(range, newText);
+  }
 }
 
 export class CompletionItem {
@@ -306,6 +318,19 @@ export const workspace = {
     readFile: async (uri: Uri) => fs.readFileSync(uri.fsPath),
     readDirectory: (uri: Uri): [string, number][] =>
       fs.readdirSync(uri.fsPath, { withFileTypes: true }).map(e => [e.name, e.isDirectory() ? 2 : 1]),
+    // 写操作（资源导航的新建/重命名/删除等）：
+    writeFile: async (uri: Uri, content: Uint8Array) => {
+      fs.writeFileSync(uri.fsPath, content);
+    },
+    createDirectory: async (uri: Uri) => {
+      fs.mkdirSync(uri.fsPath, { recursive: true });
+    },
+    rename: async (oldUri: Uri, newUri: Uri) => {
+      fs.renameSync(oldUri.fsPath, newUri.fsPath);
+    },
+    delete: async (uri: Uri, options?: { recursive?: boolean }) => {
+      fs.rmSync(uri.fsPath, { recursive: options?.recursive ?? false, force: true });
+    },
   },
   getWorkspaceFolder: (uri: Uri) => {
     const wsRoot = (globalThis as any).__zetaWsRoot;
@@ -333,7 +358,12 @@ export const workspace = {
     (globalThis as any).__lastApply = edit.ops;
     return true;
   },
+  get workspaceFolders(): { uri: Uri; name: string; index: number }[] | undefined {
+    const wsRoot = (globalThis as any).__zetaWsRoot;
+    return wsRoot ? [{ uri: Uri.file(wsRoot), name: 'root', index: 0 }] : undefined;
+  },
   onDidChangeConfiguration: () => ({ dispose() {} }),
+  onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
   onDidCloseTextDocument: () => ({ dispose() {} }),
   onDidSaveTextDocument: () => ({ dispose() {} }),
   onDidOpenTextDocument: () => ({ dispose() {} }),
@@ -350,6 +380,7 @@ export const window = {
   showInputBox: async (..._args: unknown[]): Promise<unknown> => undefined,
   showOpenDialog: async (..._args: unknown[]): Promise<unknown> => undefined,
   showWorkspaceFolderPick: async (..._args: unknown[]): Promise<unknown> => undefined,
+  showTextDocument: async (..._args: unknown[]): Promise<unknown> => undefined,
   createStatusBarItem: (..._args: unknown[]) => ({
     text: '',
     tooltip: '',
@@ -406,4 +437,11 @@ export const languages = {
 
 export const env = {
   openExternal: async (..._args: unknown[]): Promise<boolean> => true,
+  clipboard: {
+    // 记录最后一次写入，测试断言用
+    _lastWrite: undefined as string | undefined,
+    writeText: async (text: string) => {
+      (globalThis as any).__zetaClipboard = text;
+    },
+  },
 };

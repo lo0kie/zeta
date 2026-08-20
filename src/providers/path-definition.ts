@@ -67,6 +67,98 @@ export function extractImportString(
  *
  * 供 PathDefinitionProvider（F12/Ctrl+点击）与 StyleImportLinkProvider（样式 @import 链接）共用。
  */
+/**
+ * 解析裸模块说明符在 node_modules 中的入口文件（package.json 的 main / exports）。
+ * - 支持 `pkg`、`pkg/subpath`、`@scope/pkg`、`@scope/pkg/subpath`；
+ * - 从 workspace root 与 project root 两级探测 node_modules；
+ * - 解析 package.json 的 `exports['.']`/`main`/`module` 优先，子路径用 `exports[<subpath>]`；
+ * - 只返回真实存在的文件；解析失败返回空数组（不干扰既有行为）。
+ */
+async function resolveNodeModuleEntry(
+  document: vscode.TextDocument,
+  projectRoot: vscode.Uri | undefined,
+  rawPath: string
+): Promise<vscode.Uri[]> {
+  // 拆出包名与子路径：@scope/pkg/rest → 包名 '@scope/pkg'，子路径 '/rest'
+  let pkgName = rawPath;
+  let subPath = '';
+  if (rawPath.startsWith('@')) {
+    const idx = rawPath.indexOf('/');
+    if (idx !== -1) {
+      const second = rawPath.indexOf('/', idx + 1);
+      if (second !== -1) {
+        pkgName = rawPath.slice(0, second);
+        subPath = rawPath.slice(second + 1);
+      }
+    }
+  } else if (rawPath.includes('/')) {
+    const idx = rawPath.indexOf('/');
+    pkgName = rawPath.slice(0, idx);
+    subPath = rawPath.slice(idx + 1);
+  }
+
+  // 收集可能的 node_modules 根
+  const roots: (vscode.Uri | undefined)[] = [vscode.workspace.getWorkspaceFolder(document.uri)?.uri, projectRoot];
+  const nodeModulesRoots: vscode.Uri[] = [];
+  for (const r of roots) {
+    if (!r) continue;
+    const nm = vscode.Uri.joinPath(r, 'node_modules');
+    if (await isFile(vscode.Uri.joinPath(nm, pkgName, 'package.json'))) nodeModulesRoots.push(nm);
+  }
+  if (nodeModulesRoots.length === 0) return [];
+
+  const results: vscode.Uri[] = [];
+  for (const nm of nodeModulesRoots) {
+    const pkgUri = vscode.Uri.joinPath(nm, pkgName);
+    // 子路径直接拼接（跳过 exports 映射的简化路径，够用且不引入复杂条件解析）
+    if (subPath) {
+      const entry = await firstExisting([
+        vscode.Uri.joinPath(pkgUri, subPath),
+        ...['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].map(ext => vscode.Uri.joinPath(pkgUri, subPath + ext)),
+        ...['index.ts', 'index.tsx', 'index.js', 'index.jsx'].map(f => vscode.Uri.joinPath(pkgUri, subPath, f)),
+      ]);
+      if (entry) results.push(entry);
+      continue;
+    }
+
+    // 根路径：读 package.json 的 exports/main/module
+    const entry = await packageEntryUri(pkgUri);
+    if (entry) results.push(entry);
+  }
+
+  return results;
+}
+
+/** 读取包 package.json 的 exports['.'] / main / module，解析为真实文件 URI */
+async function packageEntryUri(pkgUri: vscode.Uri): Promise<vscode.Uri | undefined> {
+  try {
+    const pkgJson = vscode.Uri.joinPath(pkgUri, 'package.json');
+    const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(pkgJson));
+    const json = JSON.parse(text);
+    // exports 优先：取 '.' 的字符串形式，或 { import/require } 的第一个字符串
+    let entry: string | undefined;
+    if (json.exports) {
+      const dot = json.exports['.'];
+      if (typeof dot === 'string') entry = dot;
+      else if (dot && typeof dot === 'object') entry = dot.import ?? dot.require ?? dot.default;
+    }
+    if (!entry) entry = json.module ?? json.main ?? json.types;
+    if (!entry) {
+      // 无入口字段：回退 index.js
+      return firstExisting([vscode.Uri.joinPath(pkgUri, 'index.js'), vscode.Uri.joinPath(pkgUri, 'index.ts')]);
+    }
+    return firstExisting([vscode.Uri.joinPath(pkgUri, entry)]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 返回第一个存在的文件 URI；都不存在返回 undefined */
+async function firstExisting(uris: vscode.Uri[]): Promise<vscode.Uri | undefined> {
+  const checks = await Promise.all(uris.map(async uri => ({ uri, ok: await isFile(uri) })));
+  return checks.find(c => c.ok)?.uri;
+}
+
 export async function resolveImportFileTargets(document: vscode.TextDocument, rawPath: string): Promise<vscode.Uri[]> {
   const candidates: vscode.Uri[] = [];
   const currentDir = dirname(document.uri);
@@ -79,7 +171,7 @@ export async function resolveImportFileTargets(document: vscode.TextDocument, ra
     if (aliasUris) candidates.push(...aliasUris);
 
     if (rawPath.startsWith('@/') && projectRoot) {
-      candidates.push(vscode.Uri.joinPath(projectRoot, 'src', rawPath.slice(2)));
+      candidates.push(vscode.Uri.joinPath(projectRoot, Configuration.PATH_BASE_DIR, rawPath.slice(2)));
     }
   } else if (rawPath.startsWith('/')) {
     if (projectRoot) {
@@ -89,12 +181,21 @@ export async function resolveImportFileTargets(document: vscode.TextDocument, ra
     if (projectRoot) {
       candidates.push(vscode.Uri.joinPath(projectRoot, rawPath.replace(/^[~/]+/, '')));
     }
-  } else if (rawPath.startsWith('.') || rawPath.includes('/')) {
-    // 相对路径（./foo、../foo）或省略 ./ 前缀的相对子路径（src/utils/foo）
+  } else if (rawPath.startsWith('.')) {
+    // 相对路径（./foo、../foo）
+    candidates.push(vscode.Uri.joinPath(currentDir, rawPath));
+  } else if (rawPath.includes('/')) {
+    // 含 / 的非相对路径：优先按裸模块子路径（lodash/merge）探测 node_modules，
+    // 失败再回落为省略 ./ 前缀的相对子路径（src/utils/foo）——两种语义都尝试。
+    const moduleTargets = await resolveNodeModuleEntry(document, projectRoot, rawPath);
+    if (moduleTargets.length > 0) return moduleTargets;
     candidates.push(vscode.Uri.joinPath(currentDir, rawPath));
   } else {
-    // 裸模块说明符（react、bootstrap 等包名）：不应按相对路径解析，
-    // 否则会与同名本地文件产生错误跳转（false positive），交由专门的模块解析处理。
+    // 裸模块说明符（react、bootstrap 等包名）：不按相对路径解析（避免误跳本地同名文件）。
+    // 改为显式探测 node_modules/<pkg> 的 package.json main/exports 入口作为跳转候选，
+    // 与相对路径解析完全独立，不干扰原有「避免误跳转」的安全性。
+    const moduleTargets = await resolveNodeModuleEntry(document, projectRoot, rawPath);
+    if (moduleTargets.length > 0) return moduleTargets;
     return [];
   }
 

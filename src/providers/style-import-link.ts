@@ -1,4 +1,5 @@
 import { resolveImportFileTargets } from '@/providers/path-definition';
+import { TtlCache } from '@/core/ttl-cache';
 import * as vscode from 'vscode';
 import { STYLE_LINK_LANGS } from './style-languages';
 
@@ -21,7 +22,16 @@ const EXTERNAL_RE = /^(?:https?:|data:|file:|\/\/)/i;
 export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
   // 链接列表按文档版本缓存：编辑过程中 provideDocumentLinks 被反复请求（每次光标移动），
   // 同版本直接返回，避免每条 import 重复走 resolveImportFileTargets 的 stat 探测。
-  private _linksCache = new Map<string, { version: number; links: vscode.DocumentLink[] }>();
+  // 用 TtlCache（带容量上限 + 惰性过期清理）而非裸 Map，防止长期会话中关闭文档后 key 无界积累。
+  private _linksCache = new TtlCache<{ version: number; links: vscode.DocumentLink[] }>(60_000);
+  // 当前一次 provide 内的 rawPath → resolveImportFileTargets 的 Promise 去重表：
+  // 多个 import 指向同一目标时复用同一个探测 Promise，避免并发穿透到 stat。
+  private _resolvePromises = new Map<string, Promise<vscode.Uri[]>>();
+
+  /** 关闭文档时主动释放其缓存条目（配合 onDidCloseTextDocument） */
+  public clearLink(uri: vscode.Uri): void {
+    this._linksCache.delete(uri.toString());
+  }
 
   public async provideDocumentLinks(
     document: vscode.TextDocument,
@@ -34,8 +44,11 @@ export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
     const lineCount = document.lineCount;
 
     // 先同步收集全部匹配（保持行序），再 Promise.all 并行 resolve（每条都会触发 stat 探测，
-    // 串行 await 会按 N 倍放大首次渲染延迟；probe-cache 已在缓存命中时免读盘）
+    // 串行 await 会按 N 倍放大首次渲染延迟；probe-cache 已在缓存命中时免读盘）。
+    // 每个 import 位置都要有链接（不能去重丢位置），但相同 rawPath 的解析只做一次、结果复用：
+    // 避免同层并发 Promise 在 probe-cache 写入前全部穿透到 resolveImportUriUncached 造成重复 I/O。
     const matches: { line: number; m: RegExpExecArray }[] = [];
+    this._resolvePromises.clear();
     for (let line = 0; line < lineCount; line++) {
       const text = document.lineAt(line).text;
 
@@ -68,7 +81,13 @@ export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
     const stringEnd = quoteStart + 1 + m[2].length + 1;
     const range = new vscode.Range(line, quoteStart, line, stringEnd);
 
-    const targets = await resolveImportFileTargets(document, rawPath);
+    // 同 rawPath 复用同一个解析 Promise（probe-cache 写入前的并发穿透靠它消除）
+    let p = this._resolvePromises.get(rawPath);
+    if (!p) {
+      p = resolveImportFileTargets(document, rawPath);
+      this._resolvePromises.set(rawPath, p);
+    }
+    const targets = await p;
     if (targets.length === 0) return undefined;
 
     const link = new vscode.DocumentLink(range, targets[0]);
@@ -77,8 +96,15 @@ export class StyleImportLinkProvider implements vscode.DocumentLinkProvider {
   }
 }
 
+let linkProvider: StyleImportLinkProvider | undefined;
+
 export function registerStyleImportLinks(): vscode.Disposable {
-  const provider = new StyleImportLinkProvider();
+  linkProvider = new StyleImportLinkProvider();
   const selectors = STYLE_LINK_LANGS.map(language => ({ language, scheme: 'file' }));
-  return vscode.languages.registerDocumentLinkProvider(selectors, provider);
+  return vscode.languages.registerDocumentLinkProvider(selectors, linkProvider);
+}
+
+/** 文档关闭时清理其 import 链接缓存；在 activate 中调用，避免长会话 Map 无界增长 */
+export function clearLinkCache(uri: vscode.Uri): void {
+  linkProvider?.clearLink(uri);
 }

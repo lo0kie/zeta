@@ -418,3 +418,54 @@ test('StyleCompletionProvider: 阴影变量判为变量而非颜色', async () =
     cleanup(ws);
   }
 });
+
+test('@use ... as 命名空间：裸 $ 不提示命名空间变量，c.$ 才提示', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const app = join(ws, 'ns');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, 'colors.scss'), '$primary: #007aff;\n$secondary: #0a84ff;\n');
+
+    // 裸 $ 补全：colors 的变量带 namespace（c），应被排除，不提示
+    const bareDoc = makeDocument('@use "./colors" as c;\n.a { color: $p', join(app, 'comp1.scss'), 'scss');
+    const provider = new StyleCompletionProvider();
+    const bareItems = (await provider.provideCompletionItems(bareDoc, new Position(1, 14))) ?? [];
+    assert.ok(!bareItems.some(i => i.label === '$primary'), '裸 $ 不提示命名空间变量');
+    assert.ok(!bareItems.some(i => i.label === '$secondary'), '裸 $ 不提示命名空间变量');
+
+    // c.$ 补全：提示 c 命名空间的变量
+    const nsDoc = makeDocument('@use "./colors" as c;\n.a { color: c.$p', join(app, 'comp2.scss'), 'scss');
+    const nsItems = (await provider.provideCompletionItems(nsDoc, new Position(1, 16))) ?? [];
+    assert.ok(
+      nsItems.some(i => i.label === '$primary'),
+      'c.$ 提示命名空间变量 $primary'
+    );
+    assert.ok(
+      nsItems.some(i => i.label === '$secondary'),
+      'c.$ 提示命名空间变量 $secondary'
+    );
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('@use 无 as 别名时变量保持裸提示（宽松兼容）', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const app = join(ws, 'ns2');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, 'vars.scss'), '$brand: #f50;\n');
+
+    const doc = makeDocument('@use "./vars";\n.a { color: $br', join(app, 'comp3.scss'), 'scss');
+    const provider = new StyleCompletionProvider();
+    const items = (await provider.provideCompletionItems(doc, new Position(1, 14))) ?? [];
+    assert.ok(
+      items.some(i => i.label === '$brand'),
+      '无 as 别名变量仍裸提示'
+    );
+  } finally {
+    cleanup(ws);
+  }
+});

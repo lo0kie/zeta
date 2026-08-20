@@ -1,5 +1,13 @@
 import { registerCommand, registerTextEditorCommand } from '@/core/command';
 import { resolveUriArgument } from '@/core/fs';
+import {
+  copyAbsolutePath,
+  copyRelativePath,
+  createFile,
+  createFolder,
+  deleteEntry,
+  renameEntry,
+} from '@/explorer/actions';
 import type { ExplorerTreeViewProvider } from '@/explorer/provider';
 import * as vscode from 'vscode';
 import addFolder from './add-folder';
@@ -8,7 +16,7 @@ import cycleCase from './cycle-case';
 import cycleQuotes from './cycle-quotes';
 import { openFolder, openInDefaultBrowser } from './folder';
 import removeFolder from './remove-folder';
-import runScript from './run-script';
+import runPackageScript from './run-package-script';
 import selectBlock from './select-block';
 import selectString from './select-string';
 import showCommands from './show-commands';
@@ -43,10 +51,16 @@ export function registerCommands({ explorerProvider }: CommandDeps): vscode.Disp
     registerCommand('zeta.file.openInBrowser', openInDefaultBrowser),
     registerCommand('zeta.folder.openInWindow', arg => openFolder(arg, false)),
     registerCommand('zeta.folder.openInNewWindow', arg => openFolder(arg, true)),
-    registerCommand('zeta.folder.runScript', runScript),
+    registerCommand('zeta.folder.runPackageScript', runPackageScript),
     registerCommand('zeta.explorer.addFolder', addFolder),
     registerCommand('zeta.explorer.removeFolder', removeFolder),
     registerCommand('zeta.explorer.refresh', () => explorerProvider.refresh()),
+    registerCommand('zeta.explorer.newFile', createFile),
+    registerCommand('zeta.explorer.newFolder', createFolder),
+    registerCommand('zeta.explorer.rename', renameEntry),
+    registerCommand('zeta.explorer.delete', deleteEntry),
+    registerCommand('zeta.explorer.copyAbsolutePath', copyAbsolutePath),
+    registerCommand('zeta.explorer.copyRelativePath', copyRelativePath),
     registerCommand('zeta.terminal.toggle', toggleTerminal),
     registerCommand('zeta.showCommands', showCommands),
   ];

@@ -1,8 +1,8 @@
-import { default as cycleQuotes } from '@/commands/cycle-quotes';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import * as vscode from 'vscode';
 import { editorWith, makeDocument, setConfig } from './helpers';
+import cycleQuotes from '@/commands/cycle-quotes';
 const { Selection, Position } = vscode;
 
 function lastApply() {
@@ -43,6 +43,71 @@ test('cycleQuotes: 拼接链自动合并为模板字符串', async () => {
     const ops = lastApply();
     assert.equal(ops.length, 1);
     assert.equal(ops[0].text, '`ab`');
+  }
+});
+
+// 回归：选中/光标在拼接链内时，整条链按 ' → " → ` 顺序整体推进——
+// 单引号拼接链先整体换双引号（保留拼接结构），再执行才合并为模板。
+test('cycleQuotes: 单引号拼接链整体换为双引号（保留拼接）', async () => {
+  setConfig({});
+  {
+    const text = `const s = '已扫描本地数据，修复并对齐了 ' + repairedCount + ' 个和弦！';`;
+    const doc = makeDocument(text, '/virtual/q_concat1.ts', 'typescript');
+    // 光标在第一个字符串内
+    const editor = editorWith(doc, new Selection(new Position(0, 13), new Position(0, 13)));
+    globalThis.__lastApply = null;
+    await cycleQuotes(editor);
+    const ops = lastApply();
+    assert.equal(ops.length, 1, '整条链应整体处理');
+    assert.equal(ops[0].text, `"已扫描本地数据，修复并对齐了 " + repairedCount + " 个和弦！"`);
+  }
+});
+
+test('cycleQuotes: 选中整条单引号拼接链整体换为双引号', async () => {
+  setConfig({});
+  {
+    const text = `const s = '已扫描本地数据，修复并对齐了 ' + repairedCount + ' 个和弦！';`;
+    const doc = makeDocument(text, '/virtual/q_concat2.ts', 'typescript');
+    const start = text.indexOf("'已");
+    const end = text.lastIndexOf("' 个") + "' 个和弦！'".length;
+    const editor = editorWith(doc, new Selection(new Position(0, start), new Position(0, end)));
+    globalThis.__lastApply = null;
+    await cycleQuotes(editor);
+    const ops = lastApply();
+    assert.equal(ops.length, 1, '整条链应整体处理');
+    assert.equal(ops[0].text, `"已扫描本地数据，修复并对齐了 " + repairedCount + " 个和弦！"`);
+  }
+});
+
+test('cycleQuotes: 双引号拼接链合并为模板字符串', async () => {
+  setConfig({});
+  {
+    const text = `const s = "已扫描本地数据，修复并对齐了 " + repairedCount + " 个和弦！";`;
+    const doc = makeDocument(text, '/virtual/q_concat3.ts', 'typescript');
+    const editor = editorWith(doc, new Selection(new Position(0, 13), new Position(0, 13)));
+    globalThis.__lastApply = null;
+    await cycleQuotes(editor);
+    const ops = lastApply();
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].text, '`已扫描本地数据，修复并对齐了 ${repairedCount} 个和弦！`');
+  }
+});
+
+// 回归：选区起止落在拼接链内部（不含两端引号）时，也应识别整条链并整体处理。
+test('cycleQuotes: 选区不含两端引号仍命中整条拼接链', async () => {
+  setConfig({});
+  {
+    const text = `start'已扫描本地数据，修复并对齐了 ' + repairedCount + ' 个和弦！'end`;
+    const doc = makeDocument(text, '/virtual/q_concat4.ts', 'typescript');
+    // 选区从第一个引号之后到最后一个引号之前（不含两端引号，覆盖链主体）
+    const selStart = text.indexOf("'已") + 1;
+    const selEnd = text.lastIndexOf("'end");
+    const editor = editorWith(doc, new Selection(new Position(0, selStart), new Position(0, selEnd)));
+    globalThis.__lastApply = null;
+    await cycleQuotes(editor);
+    const ops = lastApply();
+    assert.equal(ops.length, 1, '整条拼接链应整体处理');
+    assert.equal(ops[0].text, `"已扫描本地数据，修复并对齐了 " + repairedCount + " 个和弦！"`);
   }
 });
 

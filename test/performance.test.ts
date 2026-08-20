@@ -2,6 +2,7 @@
 // 阈值取宽松上限（CI 抖动安全），主要价值是捕捉复杂度退化（如 O(n²) 回潮）。
 // 默认全量测试排除本文件（vitest.config.mts 的 exclude），需要验证性能时单独运行
 // `pnpm test:perf`（vitest.perf.config.mts），避免挂钟断言拖慢日常测试。
+import { parseStyleFile } from '@/providers/style-parser';
 import { buildLineStarts, findDefinitionRanges, lineOf } from '@/providers/style-definition';
 import assert from 'node:assert/strict';
 import { rmSync, writeFileSync } from 'node:fs';
@@ -81,6 +82,29 @@ test('resolveImportFileTargets：TTL 缓存命中后不再重复 stat（第二�
   } finally {
     cleanup(ws);
   }
+});
+
+test('parseStyleFile：1MB 样式文本单遍扫描 < 300ms（公共底层，防复杂度回潮）', () => {
+  // parseStyleFile 是补全/悬浮/跳转共享的公共底层，退化会同时拖慢三者。
+  // 文本含大量变量/选择器/嵌套块/mixin 定义，模拟真实样式文件的密度。
+  const chunk =
+    '.card { @primary: #ff9500; @bg: #fff; .header { color: $brand; } ' +
+    '.body { padding: 4px; } }\n' +
+    '.btn { color: @primary; .shadow() { box-shadow: 0 1px 3px rgba(0,0,0,.1); } }\n';
+  const text = chunk.repeat(1000); // ~200KB
+  assert.ok(text.length > 100_000, `文本应足够大，实际 ${text.length}`);
+
+  // 预热：首次可能含 JIT/分配冷启动，剔除后测稳定成本
+  parseStyleFile(text, '/virtual/tokens.less', 'less');
+  const t0 = performance.now();
+  for (let i = 0; i < 5; i++) parseStyleFile(text, '/virtual/tokens.less', 'less');
+  const dt = (performance.now() - t0) / 5;
+  // 实测单次 ~20-40ms；O(n²)（如每字符循环里嵌套扫描）退化会到数百 ms~秒级，可捕获
+  assert.ok(dt < 300, `parseStyleFile 单次应 < 300ms，实际 ${dt.toFixed(2)}ms`);
+  // 密度抽查：变量与选择器应被正确解析（不只测时间，还保证扫描非空转）
+  const parsed = parseStyleFile(text, '/virtual/tokens.less', 'less');
+  assert.ok(parsed.symbols.length > 0, '应解析出符号');
+  assert.ok(parsed.selectorDefs.size > 0, '应解析出选择器定义');
 });
 
 test('clearProbeCache：删除文件并清缓存后，重新解析不再命中旧结果', async () => {

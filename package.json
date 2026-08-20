@@ -1,7 +1,7 @@
 {
   "name": "lookie-zeta",
   "displayName": "zeta",
-  "version": "1.6.0",
+  "version": "1.8.1",
   "icon": "./public/icon.png",
   "description": "开发工具集：资源导航、标签与结构操作、命名格式转换、路径/样式补全与跳转、颜色编辑、脚本运行。无遥测、纯本地处理。",
   "categories": [
@@ -37,6 +37,7 @@
     "test:watch": "vitest",
     "test:perf": "vitest run -c vitest.perf.config.mts",
     "typecheck": "tsc --noEmit",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run test:perf",
     "format": "prettier \"src/**/*.{js,ts,vue}\" \"test/**/*.{js,ts}\" -w --cache",
     "format:check": "prettier \"src/**/*.{js,ts,vue}\" \"test/**/*.{js,ts}\" --check --cache",
     "generate-code": "node ./generate-all-code.mjs"
@@ -78,7 +79,7 @@
         "category": "zeta"
       },
       {
-        "command": "zeta.folder.runScript",
+        "command": "zeta.folder.runPackageScript",
         "title": "查找脚本运行",
         "icon": "$(package)",
         "category": "zeta"
@@ -108,6 +109,40 @@
         "category": "zeta"
       },
       {
+        "command": "zeta.explorer.newFile",
+        "title": "新建文件",
+        "icon": "$(new-file)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.newFolder",
+        "title": "新建文件夹",
+        "icon": "$(new-folder)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.rename",
+        "title": "重命名",
+        "icon": "$(edit)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.delete",
+        "title": "删除",
+        "icon": "$(trash)",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.copyAbsolutePath",
+        "title": "复制路径",
+        "category": "zeta"
+      },
+      {
+        "command": "zeta.explorer.copyRelativePath",
+        "title": "复制相对路径",
+        "category": "zeta"
+      },
+      {
         "command": "zeta.editor.cycleCase",
         "title": "循环切换单词格式",
         "category": "zeta"
@@ -134,7 +169,7 @@
       },
       {
         "command": "zeta.editor.cycleQuotes",
-        "title": "切换引号 (' / \" / `)",
+        "title": "切换引号",
         "category": "zeta"
       },
       {
@@ -248,10 +283,20 @@
           "description": "是否显示状态栏终端切换按钮",
           "default": true
         },
-        "zeta.runScript.askArguments": {
+        "zeta.show.packageScript": {
+          "type": "boolean",
+          "description": "是否显示状态栏脚本运行按钮",
+          "default": true
+        },
+        "zeta.packageScript.askArguments": {
           "type": "boolean",
           "description": "运行脚本前是否询问追加参数（如 --watch）；关闭后选中脚本直接运行",
           "default": true
+        },
+        "zeta.path.baseDir": {
+          "type": "string",
+          "description": "@/ 别名在未配置 tsconfig paths 时的兜底基础目录（相对工作区根）；源码不在 src/ 下的项目可改如 \"lib\"、\"app\"",
+          "default": "src"
         },
         "zeta.path.extensions": {
           "type": "array",
@@ -295,26 +340,31 @@
       {
         "key": "alt+shift+w",
         "command": "zeta.editor.wrapTags",
-        "when": "editorIsOpen && editorLangId =~ /^(vue|html|javascriptreact|typescriptreact)$/ && !editorReadonly"
+        "when": "editorTextFocus && editorLangId =~ /^(vue|html|javascriptreact|typescriptreact)$/ && !editorReadonly"
       },
       {
         "key": "ctrl+alt+shift+r",
-        "command": "zeta.folder.runScript",
+        "command": "zeta.folder.runPackageScript",
         "when": "workspaceFolderCount > 0 && resourceScheme != git && resourceScheme != untitled"
       },
       {
         "key": "alt+shift+e",
         "command": "zeta.editor.changeCase",
-        "when": "editorHasSelection && !editorReadonly && !zeta.caseDisabled"
+        "when": "editorTextFocus && editorHasSelection && !editorReadonly && !zeta.caseDisabled"
       },
       {
         "key": "alt+shift+c",
         "command": "zeta.editor.cycleCase",
-        "when": "editorIsOpen && !editorReadonly && editorHasSelection && !zeta.caseDisabled"
+        "when": "editorTextFocus && !editorReadonly && editorHasSelection && !zeta.caseDisabled"
       },
       {
         "key": "alt+shift+s",
         "command": "zeta.editor.selectString",
+        "when": "editorTextFocus && !editorReadonly"
+      },
+      {
+        "key": "alt+shift+z",
+        "command": "zeta.editor.selectBlock",
         "when": "editorTextFocus && !editorReadonly"
       }
     ],
@@ -332,6 +382,46 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "zeta.explorer.newFile",
+          "group": "inline@0",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.newFolder",
+          "group": "inline@1",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.newFile",
+          "group": "navigation@0",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.newFolder",
+          "group": "navigation@1",
+          "when": "view == zeta-explorer && viewItem =~ /^directory-/"
+        },
+        {
+          "command": "zeta.explorer.rename",
+          "group": "navigation@1",
+          "when": "view == zeta-explorer && viewItem =~ /^(directory|file)-/"
+        },
+        {
+          "command": "zeta.explorer.delete",
+          "group": "navigation@2",
+          "when": "view == zeta-explorer && viewItem =~ /^(directory|file)-/"
+        },
+        {
+          "command": "zeta.explorer.copyAbsolutePath",
+          "group": "2_modification@0",
+          "when": "view == zeta-explorer && viewItem =~ /^(directory|file)-/"
+        },
+        {
+          "command": "zeta.explorer.copyRelativePath",
+          "group": "2_modification@1",
+          "when": "view == zeta-explorer && viewItem =~ /^(directory|file)-/"
+        },
         {
           "command": "zeta.file.openInBrowser",
           "group": "navigation@3",
@@ -417,10 +507,10 @@
         },
         {
           "command": "zeta.editor.changeCase",
-          "when": "editorHasSelection && !editorReadonly && !zeta.caseDisabled"
+          "when": "editorIsOpen && editorHasSelection && !editorReadonly && !zeta.caseDisabled"
         },
         {
-          "command": "zeta.folder.runScript",
+          "command": "zeta.folder.runPackageScript",
           "when": "workspaceFolderCount > 0 && resourceScheme != git && resourceScheme != untitled"
         },
         {
@@ -433,6 +523,30 @@
         },
         {
           "command": "zeta.explorer.removeFolder",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.newFile",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.newFolder",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.rename",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.delete",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.copyAbsolutePath",
+          "when": "false"
+        },
+        {
+          "command": "zeta.explorer.copyRelativePath",
           "when": "false"
         },
         {
@@ -513,7 +627,8 @@
     "onLanguage:typescript",
     "onLanguage:javascriptreact",
     "onLanguage:typescriptreact",
-    "onLanguage:json"
+    "onLanguage:json",
+    "onStartupFinished"
   ],
   "devDependencies": {
     "@types/culori": "4.0.1",
@@ -531,6 +646,7 @@
     "vscode": "^1.85.0"
   },
   "dependencies": {
-    "culori": "^4.0.2"
+    "culori": "^4.0.2",
+    "jsonc-parser": "^3.3.1"
   }
 }

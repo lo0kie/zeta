@@ -57,12 +57,15 @@ function main() {
 
   const sections = files.map(rel => {
     const relPosix = rel.replace(/\\/g, '/');
-    const content = fs.readFileSync(rel, 'utf8').replace(/\r\n/g, '\n').replace(/\n*$/, '');
+    const content = fs
+      .readFileSync(rel, 'utf8')
+      .replace(/\r\n/g, '\n')
+      .replace(/^\n+|\n+$/g, '');
     return `## ${relPosix}\n\n${content}`;
   });
 
   const header = `# zeta 源码\n\n共 ${files.length} 个源文件。\n\n---\n\n`;
-  const output = header + sections.join('\n\n---\n\n') + '\n';
+  const output = header + sections.join('\n\n');
 
   fs.writeFileSync(path.resolve(process.cwd(), OUTPUT_FILE), output, 'utf8');
   console.log(`输出完成: ${path.resolve(OUTPUT_FILE)}（${files.length} 个文件）`);

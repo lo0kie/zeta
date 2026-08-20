@@ -3,7 +3,7 @@ import { appendConfiguredFolders, removeConfiguredFolder } from '@/explorer/fold
 import { ExplorerTreeViewProvider } from '@/explorer/provider';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { cleanup, countFs, makeWorkspace, norm, setConfig } from './helpers';
@@ -138,6 +138,49 @@ test('folders 配置追加、去重与移除', async () => {
     await removeConfiguredFolder(Uri.file(dirA));
     assert.deepEqual(Configuration.FOLDERS.map(norm), [dirB].map(norm));
   } finally {
+    cleanup(ws);
+  }
+});
+
+test('符号链接：按位掩码保留并正确分类（File=1|SymbolicLink=64 → 65，Directory=2|SymbolicLink → 66）', async () => {
+  const ws = makeWorkspace();
+  const dir = join(ws, 'symDir');
+  mkdirSync(dir, { recursive: true });
+
+  // 真实 fs 的 readDirectory 不把符号链接暴露为 65/66（shim 用 isDirectory/isFile），
+  // 这里 mock 返回 FileType 位掩码组合，专门验证 getChildren/getTreeItem 的按位判断。
+  const mockEntries: [string, number][] = [
+    ['realFile.ts', 1], // File
+    ['realDir', 2], // Directory
+    ['linkFile', 65], // File | SymbolicLink
+    ['linkDir', 66], // Directory | SymbolicLink
+    ['unknown', 0], // Unknown，应被过滤
+  ];
+  const spy = vi.spyOn(vscode.workspace.fs, 'readDirectory').mockResolvedValue(mockEntries);
+
+  setConfig({ 'zeta.list.folders': [dir] });
+  try {
+    const provider = new ExplorerTreeViewProvider();
+    const roots = await provider.getChildren();
+    const children = await provider.getChildren(roots[0]);
+
+    // 符号链接目录/文件都被保留（不再被「非常规类型」静默过滤）；Unknown 被过滤
+    assert.equal(children.length, 4, 'realFile/realDir/linkFile/linkDir 保留，unknown 过滤');
+    const names = children.map(c => basename(c.uri.fsPath)).sort();
+    assert.deepEqual(names, ['linkDir', 'linkFile', 'realDir', 'realFile.ts'].sort());
+
+    // getTreeItem：符号链接目录按 directory、符号链接文件按 file 归类，可打开
+    const linkFile = children.find(c => c.uri.fsPath.endsWith('linkFile'))!;
+    const linkFileItem = provider.getTreeItem(linkFile);
+    assert.ok(linkFileItem.contextValue!.startsWith('file-'), '符号链接文件按 file 归类');
+    assert.ok(linkFileItem.command, '符号链接文件有打开命令');
+
+    const linkDir = children.find(c => c.uri.fsPath.endsWith('linkDir'))!;
+    const linkDirItem = provider.getTreeItem(linkDir);
+    assert.ok(linkDirItem.contextValue!.startsWith('directory-'), '符号链接目录按 directory 归类');
+    assert.ok(!linkDirItem.command, '符号链接目录无打开命令');
+  } finally {
+    spy.mockRestore();
     cleanup(ws);
   }
 });

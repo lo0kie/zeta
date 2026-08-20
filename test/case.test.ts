@@ -1,7 +1,6 @@
-import { applyTransformerToSelections, buildCustomTransformers, default as changeCase } from '@/commands/change-case';
+import changeCase, { applyTransformerToSelections, buildCustomTransformers } from '@/commands/change-case';
 import { splitWords, wordTransformers } from '@/utils/case';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { editorWith, makeDocument, noopEdit, setConfig } from './helpers';
@@ -86,7 +85,7 @@ test('applyTransformerToSelections 同行多选区：前一个替换变短后补
     const text = 'hello_world_foo';
     const doc = makeDocument(text, '/virtual/case3.ts', 'typescript');
     const editor = editorWith(doc, [
-      new Selection(new Position(0, 0), new Position(0, 11)),
+      new vscode.Selection(new Position(0, 0), new Position(0, 11)),
       new Selection(new Position(0, 12), new Position(0, 15)),
     ]);
 

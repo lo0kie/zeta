@@ -1,6 +1,5 @@
-import { default as unwrapTags } from '@/commands/unwrap-tags';
+import unwrapTags from '@/commands/unwrap-tags';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test } from 'vitest';
 import * as vscode from 'vscode';
 import { editorWith, makeDocument, setConfig } from './helpers';
@@ -110,5 +109,43 @@ test('unwrapTags: 嵌套多行标签解构重叠区间合并', async () => {
       assert.ok(ranges[i][0] >= ranges[i - 1][1]);
     }
     assert.equal(applyOpsToText(text, doc, ops), 'x\n');
+  }
+});
+
+test('unwrapTags: Fragment 内光标解包最内层 div，Fragment 保留', async () => {
+  setConfig({});
+  {
+    const text = '<>\n  <div>hi</div>\n</>';
+    const doc = makeDocument(text, '/virtual/u6.tsx', 'typescriptreact');
+    // 光标在 div 内：findTagPairAt 选最内层是 div，unwrap div，Fragment 配对不干扰
+    const caret = text.indexOf('hi') + 1;
+    const line = text.slice(0, caret).split('\n').length - 1;
+    const col = caret - text.lastIndexOf('\n', caret) - 1;
+    const editor = editorWith(doc, new Selection(new Position(line, col), new Position(line, col)));
+    globalThis.__lastApply = null;
+    await unwrapTags(editor);
+    const ops = lastApply();
+    assert.ok(ops.length > 0, '应删除 div 标签');
+    assert.equal(applyOpsToText(text, doc, ops), '<>\n  hi\n</>', 'div 解包后 Fragment 保留');
+  }
+});
+
+test('unwrapTags: 仅 Fragment（光标不在内层标签）时可解包', async () => {
+  setConfig({});
+  {
+    const text = '<>\n  <span>x</span>\n  <span>y</span>\n</>';
+    const doc = makeDocument(text, '/virtual/u7.tsx', 'typescriptreact');
+    // 光标在 Fragment 内的空白处（span 之间），不在任何内层标签内 → 解包 Fragment
+    const caret = text.indexOf('span>y') - 3;
+    const line = text.slice(0, caret).split('\n').length - 1;
+    const col = caret - text.lastIndexOf('\n', caret) - 1;
+    const editor = editorWith(doc, new Selection(new Position(line, col), new Position(line, col)));
+    globalThis.__lastApply = null;
+    await unwrapTags(editor);
+    const ops = lastApply();
+    assert.ok(ops.length > 0, '应删除 Fragment 标签');
+    const result = applyOpsToText(text, doc, ops);
+    assert.ok(result.includes('<span>x</span>') && result.includes('<span>y</span>'), '内层 span 保留');
+    assert.ok(!result.includes('<>') && !result.includes('</>'), 'Fragment 标签已移除');
   }
 });

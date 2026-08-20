@@ -1,5 +1,6 @@
 import { dirname, isFile } from '@/core/fs';
 import { TtlCache } from '@/core/ttl-cache';
+import { parse as parseJsonc } from 'jsonc-parser';
 import * as vscode from 'vscode';
 
 /** 路径别名：key 如 '@/*'，targets 为按顺序尝试的候选 target（如 ['./src/*', './types/*']） */
@@ -20,22 +21,19 @@ const ALIAS_CACHE_TTL_MS = 5000;
 // 缓存 key 为「起始文件所在目录」，避免每次击键都向上逐级查找并重新读盘解析配置
 const aliasContextCache = new TtlCache<AliasContext | undefined>(ALIAS_CACHE_TTL_MS);
 
-/** tsconfig/jsconfig 是 JSONC：剥离注释与尾随逗号后再 JSON.parse */
-function stripJsonc(content: string): string {
-  const noComments = content.replace(/"(?:\\.|[^"\\\r\n])*?"|\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n]*/g, match =>
-    match.startsWith('/') ? '' : match
-  );
-  return noComments.replace(/("(?:\\.|[^"\\\r\n])*?")|,\s*([\]}])/g, (match, str, brace) => (str ? str : brace));
-}
-
 /** 读取 compilerOptions 的 paths 与 baseUrl（配置缺失或解析失败时返回 undefined） */
 async function readPathAliases(configUri: vscode.Uri): Promise<{ aliases: PathAlias[]; baseUrl?: string } | undefined> {
   try {
     const raw = await vscode.workspace.fs.readFile(configUri);
-    const config = JSON.parse(stripJsonc(new TextDecoder().decode(raw))) as {
+    const text = new TextDecoder().decode(raw);
+    // tsconfig/jsconfig 是 JSONC（注释 + 尾随逗号）。jsonc-parser 容错解析且不 throw，
+    // errors 只是诊断信息：合法配置里的尾随逗号/注释也会让 errors 非空，但 value 已正确解析。
+    // 因此不因 errors 非空而拒绝——仅当 value 不是对象（完全无法解析）时按失败处理。
+    const config = parseJsonc(text) as {
       compilerOptions?: { baseUrl?: string; paths?: Record<string, unknown> };
-    };
-    const { baseUrl, paths } = config?.compilerOptions ?? {};
+    } | null;
+    if (!config || typeof config !== 'object') return undefined;
+    const { baseUrl, paths } = config.compilerOptions ?? {};
     if (!paths) return undefined;
     const aliases = Object.entries(paths).flatMap(([key, values]) => {
       if (!Array.isArray(values)) return [];

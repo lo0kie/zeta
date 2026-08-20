@@ -2,12 +2,23 @@
  * HTML/JSX 标签配对扫描：自闭合/void 元素/注释/script-style 块感知。
  */
 import { escapeRegExp } from '@/core/strings';
+import { TtlCache } from '@/core/ttl-cache';
 import * as vscode from 'vscode';
 
 export interface MatchedTagPair {
   openTagRange: vscode.Range;
   closeTagRange: vscode.Range;
   isMultiLine: boolean;
+}
+
+// 按 document.version 缓存标签配对扫描：命令连续触发（快捷键重复按）时避免全文重扫。
+// 用 TtlCache（带容量上限），关闭文档的 key 由 onDidCloseTextDocument 清理。
+// 额外记录 text 并在命中时比对：规避某些环境（如单测 shim）version 不随编辑变化导致的误命中。
+const tagPairsCache = new TtlCache<{ version: number; text: string; pairs: MatchedTagPair[] }>(60_000);
+
+/** 关闭文档时清理其标签配对缓存 */
+export function clearTagPairsCache(uri: vscode.Uri): void {
+  tagPairsCache.delete(uri.toString());
 }
 
 const VOID_ELEMENTS = new Set([
@@ -81,7 +92,15 @@ function scanTag(text: string, start: number): TagInfo | undefined {
 
   const nameStart = i;
   while (i < text.length && /[a-zA-Z0-9_-]/.test(text[i])) i++;
-  if (i === nameStart) return undefined;
+  // JSX Fragment：`<>` / `</>` 无标签名。此时紧跟的是 `>`（非 selfClosing 的自闭合写法），
+  // 视为空名标签，用空字符串作为配对键，避免与任何普通标签混淆。
+  if (i === nameStart) {
+    if (text[i] === '>') {
+      // Fragment 开标签 `<>`：i 已停在 `>`，后续 while 扫描正确退出
+    } else {
+      return undefined;
+    }
+  }
   const name = text.slice(nameStart, i);
 
   let braceDepth = 0;
@@ -125,7 +144,9 @@ function scanTag(text: string, start: number): TagInfo | undefined {
 
   let j = i - 1;
   while (j > nameStart && /\s/.test(text[j])) j--;
-  const selfClosing = text[j] === '/';
+  // 闭合标签（`</x>` / `</>`）无自闭合概念：`/>` 的 `/` 是闭合斜杠，不是自闭合标记。
+  // 若不加排除，`</>` 会被误判为 selfClosing 而在配对扫描里被跳过，导致 Fragment 永不配对。
+  const selfClosing = !closing && text[j] === '/';
 
   return { name, selfClosing, closing, start, end: i };
 }
@@ -194,7 +215,12 @@ export function scanTagPairs(text: string): RawPair[] {
 }
 
 export function findAllTagPairs(document: vscode.TextDocument): MatchedTagPair[] {
-  return scanTagPairs(document.getText()).map(pair => {
+  const uriKey = document.uri.toString();
+  const text = document.getText();
+  const cached = tagPairsCache.get(uriKey);
+  if (cached && cached.version === document.version && cached.text === text) return cached.pairs;
+
+  const pairs = scanTagPairs(text).map(pair => {
     const openTagRange = new vscode.Range(document.positionAt(pair.open.start), document.positionAt(pair.open.end));
     const closeTagRange = new vscode.Range(document.positionAt(pair.close.start), document.positionAt(pair.close.end));
     return {
@@ -203,6 +229,8 @@ export function findAllTagPairs(document: vscode.TextDocument): MatchedTagPair[]
       isMultiLine: openTagRange.start.line !== closeTagRange.end.line,
     };
   });
+  tagPairsCache.set(uriKey, { version: document.version, text, pairs });
+  return pairs;
 }
 
 export function findTagPairAt(

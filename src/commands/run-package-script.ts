@@ -50,7 +50,7 @@ async function detectPackageManager(packageJsonUri: vscode.Uri, packageManagerFi
 }
 
 /** 运行 package.json 脚本：解析上下文目录 → 过滤非字符串 scripts → QuickPick 选择 → 探测包管理器并在终端执行 */
-export default async function runScript(arg?: unknown): Promise<void> {
+export default async function runPackageScript(arg?: unknown): Promise<void> {
   let targetUri = resolveUriArgument(arg);
 
   if (!targetUri) {
@@ -107,9 +107,9 @@ export default async function runScript(arg?: unknown): Promise<void> {
 
   if (!picked) return;
 
-  // zeta.runScript.askArguments 关闭时跳过询问，选中脚本直接运行
+  // zeta.packageScript.askArguments 关闭时跳过询问，选中脚本直接运行
   let extraArgs: string | undefined;
-  if (Configuration.RUN_SCRIPT_ASK_ARGUMENTS) {
+  if (Configuration.PACKAGE_SCRIPT_ASK_ARGUMENTS) {
     extraArgs = await vscode.window.showInputBox({
       prompt: `追加参数（可选，直接回车跳过）`,
       placeHolder: `例如: --watch`,

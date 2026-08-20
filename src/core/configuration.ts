@@ -11,10 +11,12 @@ type ConfigTypeMap = {
   explorer: boolean;
   filterFolders: string[];
   folders: string[];
+  pathBaseDir: string;
   pathExtensions: string[];
   pathMaxEntries: number;
   pathShowHidden: boolean;
-  runScriptAskArguments: boolean;
+  packageScript: boolean;
+  packageScriptAskArguments: boolean;
   styleMaxImportDepth: number;
   tag: string;
   terminal: boolean;
@@ -34,9 +36,11 @@ const configDefinitions = {
     key: 'zeta.path.extensions',
     default: ['.ts', '.js', '.vue', '.tsx', '.jsx', '.json', '.css', '.less', '.scss', '.sass', '.styl', '.stylus'],
   },
+  pathBaseDir: { key: 'zeta.path.baseDir', default: 'src' },
   pathMaxEntries: { key: 'zeta.path.maxCompletionEntries', default: 200 },
   pathShowHidden: { key: 'zeta.path.showHiddenFiles', default: false },
-  runScriptAskArguments: { key: 'zeta.runScript.askArguments', default: true },
+  packageScript: { key: 'zeta.show.packageScript', default: true },
+  packageScriptAskArguments: { key: 'zeta.packageScript.askArguments', default: true },
   styleMaxImportDepth: { key: 'zeta.style.maxImportDepth', default: 3 },
   tag: { key: 'zeta.string.tag', default: 'div' },
   terminal: { key: 'zeta.show.terminal', default: true },
@@ -86,6 +90,9 @@ export class Configuration {
   static get FOLDERS() {
     return this.get('folders');
   }
+  static get PATH_BASE_DIR() {
+    return this.get('pathBaseDir');
+  }
   static get PATH_EXTENSIONS() {
     return this.get('pathExtensions');
   }
@@ -95,8 +102,11 @@ export class Configuration {
   static get PATH_SHOW_HIDDEN() {
     return this.get('pathShowHidden');
   }
-  static get RUN_SCRIPT_ASK_ARGUMENTS() {
-    return this.get('runScriptAskArguments');
+  static get PACKAGE_SCRIPT() {
+    return this.get('packageScript');
+  }
+  static get PACKAGE_SCRIPT_ASK_ARGUMENTS() {
+    return this.get('packageScriptAskArguments');
   }
   static get STYLE_MAX_IMPORT_DEPTH() {
     return this.get('styleMaxImportDepth');

@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
  *
  * 覆盖全部受支持的跳转语言，纯增量能力——不改任何默认键位/点击行为，
  * 只是给"内置定义结果被坏结果抢占/排后"的场景一个可靠的鼠标入口。
- * 悬浮内容同时包含一行纯文本路径（链接不可渲染时用户仍能看到解析结果）。
+ * 悬浮内容只包含可点击的「打开」链接，不再展示冗余的纯文本路径。
  */
 export class ImportHoverProvider implements vscode.HoverProvider {
   public async provideHover(
@@ -27,8 +27,8 @@ export class ImportHoverProvider implements vscode.HoverProvider {
     targets.forEach((target, i) => {
       if (i > 0) md.appendMarkdown('\n\n');
       const args = encodeURIComponent(JSON.stringify([target.toString()]));
+      // 只保留可点击的「打开」链接，不再追加纯文本路径（避免重复且难看的路径展示）
       md.appendMarkdown(`[打开 ${target.fsPath}](command:zeta.openResolvedImport?${args})`);
-      md.appendMarkdown(`\n\n跳转目标: \`${target.fsPath}\``);
     });
     return new vscode.Hover(md, found.stringRange);
   }

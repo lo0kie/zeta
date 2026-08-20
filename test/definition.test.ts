@@ -68,6 +68,34 @@ test('StyleDefinitionProvider: 多作用域同名变量返回 Location[] 列表'
   }
 });
 
+test('StyleDefinitionProvider: 多作用域跳转按引用处命名空间优先排序', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const app = join(ws, 'app-scope');
+    mkdirSync(app, { recursive: true });
+
+    const tokens = `:root {\n  --brand: #007aff;\n}\n.dark {\n  --brand: #0a84ff;\n}`;
+    writeFileSync(join(app, 'tokens.css'), tokens);
+
+    // .dark 块内引用 var(--brand) → .dark 定义应排最前（优先命中命名空间）
+    const mainContent = `@import "./tokens.css";\n.dark .card { color: var(--brand); }`;
+    const doc = makeDocument(mainContent, join(app, 'main.css'), 'css');
+    // 光标放在 --brand 上：--brand 在第 2 行，行内相对位置用 indexOf
+    const secondLine = mainContent.split('\n')[1];
+    const col = secondLine.indexOf('--brand') + 2; // 光标在变量名中间
+    const pos = new vscode.Position(1, col);
+
+    const locs = (await provider.provideDefinition(doc, pos)) as unknown as vscode.Location[];
+    assert.ok(Array.isArray(locs));
+    assert.equal(locs.length, 2);
+    assert.equal(locs[0].range.start.line, 4, '.dark 内引用应优先命中 .dark 定义');
+    assert.equal(locs[1].range.start.line, 1, '其次才是 :root 全局定义');
+  } finally {
+    cleanup(ws);
+  }
+});
+
 // 类名/ID 跳转已移除（交给内置 CSS 语言服务），只保留变量 / mixin / var(--xxx)。
 test('StyleDefinitionProvider: less mixin 调用跳转到定义', async () => {
   const ws = makeWorkspace();

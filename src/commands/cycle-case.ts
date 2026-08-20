@@ -29,6 +29,18 @@ function cycleKey(uri: vscode.Uri, anchor: vscode.Position): string {
 }
 
 /**
+ * 清理指定文档的循环状态：文档关闭后其所有 key 永久失效（光标已随文档销毁，
+ * 不再可能回到同位置续接），若不清除会在长期会话中无界积累。
+ * 供 index.ts 的 onDidCloseTextDocument 钩子调用。
+ */
+export function clearCycleState(uri: vscode.Uri): void {
+  const prefix = `${uri.toString()}:`;
+  for (const key of cycleState.keys()) {
+    if (key.startsWith(prefix)) cycleState.delete(key);
+  }
+}
+
+/**
  * 循环切换单词格式：按 zeta.case.cycleOrder 顺序逐格式前进，以一轮为单位去重。
  * 每个选区独立；下个格式产生与当前相同（或本轮已出现）的文本时跳过；
  * 一轮（遍历全部格式、找不到新文本）结束，下一次切换精确回到最初文本

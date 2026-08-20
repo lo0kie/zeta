@@ -183,3 +183,36 @@ test('变量悬浮：阴影变量展示定义的样子（完整多段值）', as
     cleanup(ws);
   }
 });
+
+// 一层解引用：变量值引用其他变量时（var(--x) / @y），再展开一层显示实际值。
+test('变量悬浮：值引用的变量再展开一层（var()/@ 解引用）', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    mkdirSync(join(ws, 'app'), { recursive: true });
+    writeFileSync(
+      join(ws, 'app', 'tokens.less'),
+      `:root {\n  --primary: #ff9500;\n  --brand: var(--primary);\n}\n@base: #0a84ff;\n@link: @base;\n`
+    );
+    const text = `@import "./tokens";\n.a { color: var(--brand); background: @link; }\n`;
+    const doc = makeDocument(text, join(ws, 'app', 'm3.less'), 'less');
+    const line1 = text.split('\n')[1];
+
+    // 悬浮 --brand：其值 var(--primary) 再展开 → 显示 --primary = #ff9500
+    const brandHover = await provider.provideHover(doc, new vscode.Position(1, line1.indexOf('--brand') + 4));
+    assert.ok(brandHover, '--brand 悬浮');
+    const brandText = hoverText(brandHover);
+    assert.ok(brandText.includes('--brand: var(--primary);'), '展示定义的样子');
+    assert.ok(brandText.includes('--primary') && brandText.includes('#ff9500'), '一层解引用显示实际值');
+    assert.ok(brandText.includes('`--primary` = `#ff9500`'), '解引用格式为 name = value');
+
+    // 悬浮 @link：值 @base 再展开 → 显示 @base = #0a84ff
+    const linkHover = await provider.provideHover(doc, new vscode.Position(1, line1.indexOf('@link') + 2));
+    assert.ok(linkHover, '@link 悬浮');
+    const linkText = hoverText(linkHover);
+    assert.ok(linkText.includes('@link: @base;'), '展示定义的样子');
+    assert.ok(linkText.includes('`@base` = `#0a84ff`'), '@ 变量一层解引用');
+  } finally {
+    cleanup(ws);
+  }
+});

@@ -17,7 +17,7 @@ export function makeWorkspace(): string {
 }
 
 /**
- * 注入 zeta 配置（key 为完整配置名，如 'zeta.runScript.askArguments'）。
+ * 注入 zeta 配置（key 为完整配置名，如 'zeta.packageScript.askArguments'）。
  * 直接写入 globalThis.__zetaCfg，由 shim 的 getConfiguration 读取——
  * 不再覆盖 vscode API（此前 helpers 直接重赋值 getConfiguration / 事件属错误写法）。
  */

@@ -458,3 +458,55 @@ test('自定义 zeta.path.extensions：只探测配置的后缀', async () => {
     cleanup(ws);
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// 裸模块说明符 → node_modules 跳转（补充候选，不破坏原「避免误跳」安全性）
+// ─────────────────────────────────────────────────────────────
+
+test('裸模块：node_modules 包按 package.json main 跳转入口文件', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const nm = join(ws, 'node_modules', 'mypkg');
+    mkdirSync(join(nm, 'dist'), { recursive: true });
+    writeFileSync(join(nm, 'package.json'), JSON.stringify({ name: 'mypkg', main: 'dist/index.js' }));
+    writeFileSync(join(nm, 'dist', 'index.js'), 'module.exports = 1;');
+
+    const doc = makeDocument(`import x from 'mypkg';\n`, join(ws, 'main.ts'), 'typescript');
+    const loc = await provider.provideDefinition(doc, new vscode.Position(0, 18));
+    assert.equal(normSep(firstFsPath(loc) ?? ''), normSep(join(nm, 'dist', 'index.js')), '按 main 跳转入口');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('裸模块：子路径 lodash/merge 直接拼接跳转', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    const nm = join(ws, 'node_modules', 'lodash');
+    mkdirSync(join(nm, 'merge'), { recursive: true });
+    writeFileSync(join(nm, 'package.json'), JSON.stringify({ name: 'lodash' }));
+    writeFileSync(join(nm, 'merge', 'index.js'), 'export default 1;');
+
+    const doc = makeDocument(`import merge from 'lodash/merge';\n`, join(ws, 'main.ts'), 'typescript');
+    const loc = await provider.provideDefinition(doc, new vscode.Position(0, 22));
+    assert.equal(normSep(firstFsPath(loc) ?? ''), normSep(join(nm, 'merge', 'index.js')), '子路径命中 index.js');
+  } finally {
+    cleanup(ws);
+  }
+});
+
+test('裸模块：node_modules 不存在时仍返回 undefined（不误跳本地同名文件）', async () => {
+  const ws = makeWorkspace();
+  setConfig({});
+  try {
+    // 本地同名文件存在，但无 node_modules → 不跳转（保持原安全行为）
+    writeFileSync(join(ws, 'mypkg.ts'), 'export const x = 1;');
+    const doc = makeDocument(`import x from 'mypkg';\n`, join(ws, 'main.ts'), 'typescript');
+    const loc = await provider.provideDefinition(doc, new vscode.Position(0, 18));
+    assert.equal(loc, undefined);
+  } finally {
+    cleanup(ws);
+  }
+});

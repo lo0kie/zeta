@@ -41,6 +41,11 @@ export function indentUnit(options?: vscode.TextEditorOptions): string {
   return options.insertSpaces ? ' '.repeat(Number(options.tabSize || 2)) : '\t';
 }
 
+/** 转义 Snippet 语法保留字符（$、}、\），防止原代码内容被 Snippet 引擎误解析 */
+export function escapeSnippetText(text: string): string {
+  return text.replace(/[$}\\]/g, '\\$&');
+}
+
 export function leadingIndent(text: string): string {
   return text.match(/^[\t ]*/)?.[0] ?? '';
 }

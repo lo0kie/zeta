@@ -1,4 +1,4 @@
-import { default as runScript } from '@/commands/run-script';
+import runPackageScript from '@/commands/run-package-script';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,9 +28,9 @@ function spyTerminal(executedCmds: string[]): void {
   vi.spyOn(vscode.window, 'createTerminal').mockImplementation(() => fakeTerminal(executedCmds));
 }
 
-test('run-script: packageManager 声明优先于锁文件', async () => {
+test('run-package-script: packageManager 声明优先于锁文件', async () => {
   const ws = makeWorkspace();
-  setConfig({ 'zeta.runScript.askArguments': false });
+  setConfig({ 'zeta.packageScript.askArguments': false });
   try {
     const pkgPath = join(ws, 'package.json');
     writeFileSync(
@@ -46,16 +46,16 @@ test('run-script: packageManager 声明优先于锁文件', async () => {
     spyQuickPick('build', 'tsc');
     spyTerminal(executedCmds);
 
-    await runScript(Uri.file(pkgPath));
+    await runPackageScript(Uri.file(pkgPath));
     assert.equal(executedCmds[0], 'pnpm run build');
   } finally {
     cleanup(ws);
   }
 });
 
-test('run-script: 锁文件映射嗅探 (yarn / bun / pnpm)', async () => {
+test('run-package-script: 锁文件映射嗅探 (yarn / bun / pnpm)', async () => {
   const ws = makeWorkspace();
-  setConfig({ 'zeta.runScript.askArguments': false });
+  setConfig({ 'zeta.packageScript.askArguments': false });
   try {
     const testCases = [
       { lock: 'yarn.lock', expectedManager: 'yarn' },
@@ -75,7 +75,7 @@ test('run-script: 锁文件映射嗅探 (yarn / bun / pnpm)', async () => {
       spyQuickPick('dev', 'vite');
       spyTerminal(executedCmds);
 
-      await runScript(Uri.file(pkgPath));
+      await runPackageScript(Uri.file(pkgPath));
       assert.equal(executedCmds[0], `${expectedManager} run dev`);
     }
   } finally {
@@ -83,9 +83,9 @@ test('run-script: 锁文件映射嗅探 (yarn / bun / pnpm)', async () => {
   }
 });
 
-test('run-script: askArguments=true 追加参数', async () => {
+test('run-package-script: askArguments=true 追加参数', async () => {
   const ws = makeWorkspace();
-  setConfig({ 'zeta.runScript.askArguments': true });
+  setConfig({ 'zeta.packageScript.askArguments': true });
   try {
     const pkgPath = join(ws, 'package.json');
     writeFileSync(pkgPath, JSON.stringify({ scripts: { test: 'vitest' } }));
@@ -97,16 +97,16 @@ test('run-script: askArguments=true 追加参数', async () => {
     );
     spyTerminal(executedCmds);
 
-    await runScript(Uri.file(pkgPath));
+    await runPackageScript(Uri.file(pkgPath));
     assert.equal(executedCmds[0], 'npm run test -- --coverage --ui');
   } finally {
     cleanup(ws);
   }
 });
 
-test('run-script: 目标为普通文件时向上查找 package.json', async () => {
+test('run-package-script: 目标为普通文件时向上查找 package.json', async () => {
   const ws = makeWorkspace();
-  setConfig({ 'zeta.runScript.askArguments': false });
+  setConfig({ 'zeta.packageScript.askArguments': false });
   try {
     const subDir = join(ws, 'src', 'components');
     mkdirSync(subDir, { recursive: true });
@@ -118,14 +118,14 @@ test('run-script: 目标为普通文件时向上查找 package.json', async () =
     spyQuickPick('lint', 'eslint');
     spyTerminal(executedCmds);
 
-    await runScript(Uri.file(targetFile));
+    await runPackageScript(Uri.file(targetFile));
     assert.equal(executedCmds[0], 'npm run lint');
   } finally {
     cleanup(ws);
   }
 });
 
-test('run-script: package.json 缺失、语法损坏与空 scripts 异常提示', async () => {
+test('run-package-script: package.json 缺失、语法损坏与空 scripts 异常提示', async () => {
   const ws = makeWorkspace();
   setConfig({});
   try {
@@ -147,29 +147,29 @@ test('run-script: package.json 缺失、语法损坏与空 scripts 异常提示'
 
     const nonExist = join(ws, 'empty-dir');
     mkdirSync(nonExist, { recursive: true });
-    await runScript(Uri.file(nonExist));
+    await runPackageScript(Uri.file(nonExist));
     assert.ok(warnMessage.includes('package.json'));
 
     warnMessage = '';
     const emptyPkg = join(ws, 'empty-pkg', 'package.json');
     mkdirSync(join(ws, 'empty-pkg'), { recursive: true });
     writeFileSync(emptyPkg, JSON.stringify({ name: 'empty' }));
-    await runScript(Uri.file(emptyPkg));
+    await runPackageScript(Uri.file(emptyPkg));
     assert.ok(warnMessage.includes('未配置任何 scripts'));
 
     const brokenPkg = join(ws, 'broken-pkg', 'package.json');
     mkdirSync(join(ws, 'broken-pkg'), { recursive: true });
     writeFileSync(brokenPkg, '{ invalid json }');
-    await runScript(Uri.file(brokenPkg));
+    await runPackageScript(Uri.file(brokenPkg));
     assert.ok(errorMessage.includes('无法正确解析'));
   } finally {
     cleanup(ws);
   }
 });
 
-test('run-script: Monorepo 子包无锁文件时向上查找根目录 pnpm-lock.yaml', async () => {
+test('run-package-script: Monorepo 子包无锁文件时向上查找根目录 pnpm-lock.yaml', async () => {
   const ws = makeWorkspace();
-  setConfig({ 'zeta.runScript.askArguments': false });
+  setConfig({ 'zeta.packageScript.askArguments': false });
   try {
     writeFileSync(join(ws, 'pnpm-lock.yaml'), '');
     const pkgDir = join(ws, 'packages', 'client');
@@ -181,7 +181,7 @@ test('run-script: Monorepo 子包无锁文件时向上查找根目录 pnpm-lock.
     spyQuickPick('build', 'vite build');
     spyTerminal(executedCmds);
 
-    await runScript(Uri.file(pkgJson));
+    await runPackageScript(Uri.file(pkgJson));
     assert.equal(executedCmds[0], 'pnpm run build');
   } finally {
     cleanup(ws);

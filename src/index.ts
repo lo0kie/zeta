@@ -2,6 +2,9 @@
  * 扩展激活入口：装配全部 provider、命令、事件与状态栏组件。
  */
 import { registerCommands } from '@/commands';
+import { clearCycleState } from '@/commands/cycle-case';
+import { clearSelectionBlockCache } from '@/commands/select-block';
+import { clearSelectionStringCache } from '@/commands/select-string';
 import { clearProbeCache } from '@/core/probe-cache';
 import { registerEvents } from '@/events';
 import { registerSelectionContext } from '@/events/selection-context';
@@ -17,12 +20,15 @@ import {
   untrackOpenDocument,
 } from '@/providers/style-completion';
 import { registerStyleHover } from '@/providers/style-hover';
+import { FileSizeStatusItem } from '@/statusbar/file-size';
+import { PackageScriptStatusItem } from '@/statusbar/run-package-script';
 import { TerminalToggleStatusItem } from '@/statusbar/terminal-toggle';
+import { clearTagPairsCache } from '@/utils/tag';
 import * as vscode from 'vscode';
 import { registerImportHover } from './providers/import-hover';
 import { registerPathDefinition } from './providers/path-definition';
 import { registerStyleDefinition } from './providers/style-definition';
-import { registerStyleImportLinks } from './providers/style-import-link';
+import { clearLinkCache, registerStyleImportLinks } from './providers/style-import-link';
 import { clearStyleIndex } from './providers/style-index';
 
 /** 扩展激活入口：装配资源导航、路径/样式补全、颜色/悬浮提供者、终端开关与全部命令 */
@@ -58,6 +64,14 @@ export function activate(context: vscode.ExtensionContext) {
       clearStyleDocCache(doc.uri);
       clearColorCache(doc.uri);
       clearStyleIndex(doc.uri);
+      // import 链接缓存（按文档版本缓存，关闭后 key 永久失效，避免长会话无界增长）
+      clearLinkCache(doc.uri);
+      // 编辑器命令的全文扫描缓存（select-block / select-string / 标签配对），关闭即释放
+      clearSelectionBlockCache(doc.uri);
+      clearSelectionStringCache(doc.uri);
+      clearTagPairsCache(doc.uri);
+      // 文档关闭即清理其选区循环状态（key 含 uri，关闭后永久失效，避免长期会话无界积累）
+      clearCycleState(doc.uri);
     }),
     // 样式文件保存后立刻失效其原文/符号/文档级缓存与文件索引，避免 TTL 窗口内补全与悬浮用旧值
     vscode.workspace.onDidSaveTextDocument(doc => {
@@ -73,6 +87,8 @@ export function activate(context: vscode.ExtensionContext) {
     explorerTreeView,
     explorerTreeView.onDidChangeVisibility(({ visible }) => explorerProvider.refresh(visible)),
     new TerminalToggleStatusItem(),
+    new PackageScriptStatusItem(),
+    new FileSizeStatusItem(),
     ...registerCommands({ explorerProvider }),
     registerEvents(explorerProvider),
     registerSelectionContext()

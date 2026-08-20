@@ -98,6 +98,31 @@ function isVueDynamicAttr(attrName: string): boolean {
   return attrName.startsWith(':') || attrName.startsWith('@') || attrName.startsWith('v-') || attrName.startsWith('#');
 }
 
+/**
+ * 命中与选区相交的字符串 token：
+ * - 空选区（selStart === selEnd）：取「包含光标的最小 token」（嵌套时选最内层）；
+ * - 非空选区：取「与选区相交」的 token（token 含选区，或选区含 token）；
+ * - 多个命中时按区间长度升序取最小者。
+ * 可选 filter 仅保留满足条件的 token（如 t.quote === '`'）。
+ */
+export function findTokenAt(
+  tokens: StringToken[],
+  selStart: number,
+  selEnd: number,
+  isEmpty: boolean,
+  filter?: (t: StringToken) => boolean
+): StringToken | undefined {
+  return tokens
+    .filter(
+      t =>
+        (!filter || filter(t)) &&
+        (isEmpty
+          ? t.start <= selStart && t.end >= selEnd
+          : (t.start <= selStart && t.end >= selEnd) || (selStart <= t.start && selEnd >= t.end))
+    )
+    .sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+}
+
 export function getNextQuote(
   currentQuote: string,
   enclosingQuote?: string,
@@ -325,7 +350,7 @@ export function scanStringTokens(text: string): StringToken[] {
   return tokens;
 }
 
-function splitTemplateSegments(rawText: string): { type: 'str' | 'expr'; value: string }[] {
+export function splitTemplateSegments(rawText: string): { type: 'str' | 'expr'; value: string }[] {
   const content = rawText.slice(1, -1);
   const segments: { type: 'str' | 'expr'; value: string }[] = [];
   let i = 0;
@@ -473,6 +498,41 @@ export function findConcatenationChain(
   return null;
 }
 
+/**
+ * 按选区范围在整行内查找拼接链：返回「与选区相交」且「覆盖选区主体」的拼接链。
+ * 用于选区不含两端引号（起止落在拼接链内部）时也能识别整条拼接链——此时 findTokenAt
+ * 因选区跨多个字符串 token 而失败，但选区实际覆盖的是同一条拼接链。
+ * 返回 null 表示该行内没有命中选区的拼接链。
+ */
+export function findConcatChainByRange(
+  lineText: string,
+  lineStartOffset: number,
+  selStart: number,
+  selEnd: number
+): { start: number; end: number; raw: string } | null {
+  const relStart = selStart - lineStartOffset;
+  const relEnd = selEnd - lineStartOffset;
+
+  CONCAT_CHAIN_REGEXP.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = CONCAT_CHAIN_REGEXP.exec(lineText)) !== null) {
+    const mStart = match.index;
+    const mEnd = match.index + match[0].length;
+    // 选区与拼接链相交（重叠），即选区起止任一落在链内或覆盖链的一部分
+    const overlap = relStart <= mEnd && relEnd >= mStart;
+    // 选区起点在链起点之后、终点在链终点之前（不含两端引号，但覆盖链主体）视为命中
+    const coversBody = relStart >= mStart && relEnd <= mEnd;
+    if (overlap && coversBody) {
+      return {
+        start: lineStartOffset + mStart,
+        end: lineStartOffset + mEnd,
+        raw: match[0].trim(),
+      };
+    }
+  }
+  return null;
+}
+
 export function convertConcatToTemplate(concatExpr: string): string {
   const terms = concatExpr.match(new RegExp(CHAIN_TERM_SRC, 'g')) ?? [];
   let result = '`';
@@ -487,6 +547,33 @@ export function convertConcatToTemplate(concatExpr: string): string {
     }
   }
   return result + '`';
+}
+
+/**
+ * 把拼接链整体从一种引号切到另一种引号（保留拼接结构，不合并）。
+ * 用于引号循环中间态（如 `'a' + x + 'b'` → `"a" + x + "b"`）：
+ * - 字符串 term 整体换引号（内部冲突引号反转、转义规整）
+ * - 裸表达式 term 保持原样
+ * 与 convertConcatToTemplate（→ 模板合并）互补：后者在切到反引号时使用。
+ * 拼接链 term 间以原有空白连接，保证非字符串 term（如数字/标识符）原样保留。
+ */
+export function transformConcatQuotes(concatExpr: string, fromQuote: string, toQuote: string): string {
+  // 逐 term 重建，保留 term 间的分隔（+ 两侧空白）。用 splitConcatTerms 定位每个 term，
+  // 对字符串 term 换引号，expr term 原样；term 之间的间隔原文（空白 + + + 空白）原样拼接。
+  const terms = splitConcatTerms(concatExpr);
+  let result = '';
+  let prevEnd = 0;
+  for (const term of terms) {
+    result += concatExpr.slice(prevEnd, term.start); // term 前间隔（含 + 与空白）
+    if (term.type === 'str') {
+      result += `${toQuote}${escapeStringContent(term.value, fromQuote, toQuote)}${toQuote}`;
+    } else {
+      result += concatExpr.slice(term.start, term.end); // 表达式/数字等原样
+    }
+    prevEnd = term.end;
+  }
+  result += concatExpr.slice(prevEnd); // 尾部（trim 掉的空白）
+  return result;
 }
 
 export function transformQuotes(rawText: string, fromQuote: string, toQuote: string): string {
@@ -512,6 +599,135 @@ export function transformQuotes(rawText: string, fromQuote: string, toQuote: str
   }
   const content = rawText.slice(1, -1);
   return `${toQuote}${escapeStringContent(content, fromQuote, toQuote)}${toQuote}`;
+}
+
+/**
+ * 模板字符串（含表达式）→ 拼接时，把「模板内部偏移」映射为「拼接文本内偏移」。
+ * 与 transformQuotes('`' → "'") 的分段结构保持一致，按 str/expr 段分别映射：
+ * - str 段：模板内 `内容` → `'内容'`（内容前 +1 引号）
+ * - expr 段：模板内 `${expr}` → `expr`（expr 起点从 ${ 后开始，去掉 ${ 与 }）
+ * - 段间以 ` + ` 连接（每处 +3）
+ * 返回 null 表示无表达式（保持原样，偏移不变）或偏移落在无法映射的边界（如 trim 掉的空白）。
+ */
+export function mapTemplateOffset(rawText: string, offsetInTemplate: number): number | null {
+  const segments = splitTemplateSegments(rawText);
+  if (!segments.some(s => s.type === 'expr')) return null;
+
+  let cursorInTemplate = 1; // 模板内起点（跳过开头反引号）
+  let cursorInConcat = 0; // 拼接文本起点
+  let lastMapped: number | null = null; // 最近一个可映射的拼接偏移，供边界兜底
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg.type === 'str') {
+      const innerLen = seg.value.length;
+      // 该 str 段对应拼接内 `'内容'`：模板内 [cursorInTemplate, +innerLen) → 拼接内 [cursorInConcat+1, +innerLen)
+      if (offsetInTemplate >= cursorInTemplate && offsetInTemplate <= cursorInTemplate + innerLen) {
+        const rel = offsetInTemplate - cursorInTemplate;
+        return cursorInConcat + 1 + rel;
+      }
+      if (offsetInTemplate < cursorInTemplate) return lastMapped; // 落在本段之前（如 ${ 前缀）→ 用上一映射
+      lastMapped = cursorInConcat + innerLen + 1; // 本段末尾（'内容' 的闭引号位置）
+      cursorInTemplate += innerLen;
+      cursorInConcat += innerLen + 2; // '内容'
+    } else {
+      // expr 段：模板内 `${expr}`（expr 从 cursorInTemplate+2 开始，占 2 + innerLen 字符，含 ${ 与 }）
+      const exprStart = cursorInTemplate + 2;
+      const innerLen = seg.value.length;
+      // 落在 ${ 前缀（`$`/`{`，即 [cursorInTemplate, exprStart)）→ 映射到 expr 起点
+      if (offsetInTemplate >= cursorInTemplate && offsetInTemplate < exprStart) return cursorInConcat;
+      if (offsetInTemplate >= exprStart && offsetInTemplate <= exprStart + innerLen) {
+        const rel = offsetInTemplate - exprStart;
+        return cursorInConcat + rel;
+      }
+      lastMapped = cursorInConcat + innerLen; // expr 末尾（拼接内表达式结束）
+      cursorInTemplate = exprStart + innerLen + 1; // 到表达式结束含 `}`（共 ${expr}）
+      cursorInConcat += innerLen;
+    }
+    if (i < segments.length - 1) cursorInConcat += 3; // 段间 ' + '
+  }
+  // 落在结尾（闭反引号/`}` 后）→ 返回最后的映射
+  return lastMapped;
+}
+
+/** 拼接链的单个片段：str 为引号字符串（值去引号，quote 为引号字符），expr 为裸表达式 */
+export interface ConcatTerm {
+  type: 'str' | 'expr';
+  value: string;
+  /** str 段的引号字符（' / " / `）；expr 段为 undefined */
+  quote?: string;
+  /** 在拼接链原文中的起点（不含前导空白） */
+  start: number;
+  /** 终点（不含） */
+  end: number;
+}
+
+/**
+ * 把拼接链（如 `'a' + x + 'b'`）拆成 str/expr 段。
+ * 与 splitTemplateSegments 互为逆方向：str 段对应模板文本，expr 段对应 `${expr}`。
+ * 复用 CHAIN_TERM_SRC 逐个匹配 term，str 为引号包围、其余为裸表达式。
+ */
+export function splitConcatTerms(concatExpr: string): ConcatTerm[] {
+  const terms: ConcatTerm[] = [];
+  const re = new RegExp(CHAIN_TERM_SRC, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(concatExpr)) !== null) {
+    const raw = m[0];
+    const isStr =
+      (raw.startsWith("'") && raw.endsWith("'")) ||
+      (raw.startsWith('"') && raw.endsWith('"')) ||
+      (raw.startsWith('`') && raw.endsWith('`'));
+    terms.push({
+      type: isStr ? 'str' : 'expr',
+      value: isStr ? raw.slice(1, -1) : raw,
+      quote: isStr ? raw[0] : undefined,
+      start: m.index,
+      end: m.index + raw.length,
+    });
+  }
+  return terms;
+}
+
+/**
+ * 拼接链（含表达式）→ 模板字符串时，把「拼接内偏移」映射为「模板字符串内偏移」。
+ * 与 mapTemplateOffset 互为逆方向，按 str/expr 段分别映射：
+ * - str 段：拼接内 `'内容'` → 模板内 `内容`（内容前 -1 引号）
+ * - expr 段：拼接内 `expr` → 模板内 `${expr}`（expr 起点从 ${ 后开始，加 ${ 与 }）
+ * - 段间拼接以 ` + ` 连接（每处 -3），模板内无分隔
+ * 返回相对模板反引号（=0）的偏移；无法映射时返回 null。
+ */
+export function mapConcatOffset(concatExpr: string, offsetInConcat: number): number | null {
+  const terms = splitConcatTerms(concatExpr);
+  if (terms.length === 0) return null;
+
+  let cursorConcat = 0; // 拼接文本内游标（相对拼接起点 0）
+  let cursorTemplate = 1; // 模板内游标（相对反引号=0，内容从 1 起）
+  let lastMapped: number | null = null; // 最近可映射的模板偏移，供段间边界兜底
+  for (let i = 0; i < terms.length; i++) {
+    const term = terms[i];
+    if (term.type === 'str') {
+      const innerLen = term.value.length;
+      const contentStart = cursorConcat + 1; // '内容' 的内容起点
+      if (offsetInConcat >= contentStart && offsetInConcat <= contentStart + innerLen) {
+        return cursorTemplate + (offsetInConcat - contentStart);
+      }
+      if (offsetInConcat >= cursorConcat && offsetInConcat < contentStart) return cursorTemplate; // 开引号→内容起点
+      lastMapped = cursorTemplate + innerLen; // '内容' 的闭引号→内容末尾
+      cursorConcat += innerLen + 2; // '内容'
+      cursorTemplate += innerLen;
+    } else {
+      const innerLen = term.value.length;
+      const templateExprStart = cursorTemplate + 2; // ${expr} 的 expr 起点
+      if (offsetInConcat >= cursorConcat && offsetInConcat <= cursorConcat + innerLen) {
+        return templateExprStart + (offsetInConcat - cursorConcat);
+      }
+      if (offsetInConcat < cursorConcat) return lastMapped ?? templateExprStart;
+      lastMapped = templateExprStart + innerLen; // expr 末尾（} 前）
+      cursorConcat += innerLen;
+      cursorTemplate += innerLen + 3; // ${expr} 共 innerLen+3 字符（${ 2 + expr + } 1）
+    }
+    if (i < terms.length - 1) cursorConcat += 3; // 段间 ' + '
+  }
+  return lastMapped;
 }
 
 export function transformAttrQuotes(rawText: string, fromQuote: string, toQuote: string): string {

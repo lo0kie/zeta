@@ -2,6 +2,66 @@
 
 本文件自 1.5.0 起维护。1.5.1 起的修复随版本累积记录；1.5.0 的修复见下方。更早版本的功能与修复见 README 与 git 历史。
 
+## [1.8.1] - 2026-08-20
+
+### 新增
+
+- **`Alt+Shift+Z` 快捷键**：绑定「选中当前块」命令（与 `Alt+Shift+S` 选中字符串、`Alt+Shift+W` 包裹标签同族）。
+- **状态栏当前文件大小**（`src/statusbar/file-size.ts`）：右侧显示活动编辑器文件的磁盘大小，跟随活动编辑器切换与保存刷新；未保存（`untitled`）或不可读文件自动隐藏，无点击与 hover 交互。
+- **状态栏脚本运行按钮**（`src/statusbar/run-package-script.ts`）：左侧 npm 风格图标，点击执行 `zeta.folder.runPackageScript` 查找 `package.json` 脚本运行；受 `zeta.show.packageScript` 控制，无工作区时自动隐藏。
+
+### 修复
+
+- **import 链接缓存内存泄漏**（`StyleImportLinkProvider._linksCache`）：从裸 `Map` 换成 `TtlCache`（容量上限 + 惰性清理），并补上文档关闭时遗漏的 `clearLinkCache(doc.uri)` 清理——此前长会话中反复打开/关闭样式或 vue 文件会导致该缓存无界增长。
+- **import 解析同层重复探测**：多个 import 指向同一目标时复用同一个解析 `Promise`，避免并发请求在 `probe-cache` 写入前全部穿透到 `stat`，减少多文件共享基础样式文件的重复 I/O。
+
+### 变更
+
+- **颜色写回固定顺序**：点色块调色时 `provideColorPresentations` 固定返回全部 8 种格式、不做任何基于原文的重排——既不「匹配原文排第一」（原文是 oklch 时 oklch 永远默认），也不「确认后自动前进」（该方案会与 VS Code 确认机制冲突，导致格式循环变化、颜色不变而闪烁）。格式由用户在下拉中手动选择，选什么写回什么。
+- **vue `<style>` 变量引用色块**：`var(--x)` 引用纯色变量时，色块显示在**变量名**上（`var(` 之后），写回时用 `ColorPresentation.textEdit` 整体替换 `var(--x)` 为真实色值（避免留下 `var(#ff9500)` 非法 CSS）。可正常调色。
+- **oklch/oklab 重复色块修复**：`LAB`/`LCH` 正则加 `(?<!ok)` 负向前瞻，避免在 `oklab(`/`oklch(` 内部误匹配子串 `lab(`/`lch(` 产生两个色块。
+- **import hover 精简**：去掉冗余的纯文本「跳转目标: 路径」行，只保留可点击的「打开」链接。
+- **`jsonc-parser` 替换手写 `stripJsonc`**：tsconfig/jsconfig 的 JSONC 容错解析改用微软官方 `jsonc-parser`，不再维护手写注释/尾逗号剥离正则；并修正「errors 非空不拒绝」——合法配置的尾随逗号/注释会产生 errors 但 value 已正确解析。
+- **culori 按需引入（`culori/fn`）**：从默认入口改为 `culori/fn` 手动 `useMode` 注册实际用到的 7 个色彩空间，dist 体积 120.67 KB → 98.56 KB。
+- **运行脚本命令/配置重命名（破坏性）**：`runScript` 统一改为更准确的 `runPackageScript`——命令 `zeta.folder.runScript` → `zeta.folder.runPackageScript`；配置 `zeta.runScript.askArguments` → `zeta.packageScript.askArguments`、`zeta.show.runScript` → `zeta.show.packageScript`。已有快捷键绑定与设置需相应更新。
+
+### 重构
+
+- 消除重复实现：抽取 `escapeSnippetText`（`edits.ts`）、`findTokenAt`（`quote.ts`）、`inHtmlComment` / `nonTemplateBlocks`（新增 `utils/vue-blocks.ts`）、`rgbToHex`（`color.ts`）、`maskCommentsAndStrings`（`text.ts`），替换 wrap-with / tags-wrap / cycle-quotes / template-to-concat / style-completion / style-color / style-definition / explorer-actions 中各自重复的代码。
+
+## [1.7.0] - 2026-08-20
+
+### 新增
+
+- **资源导航文件操作**（`src/explorer/actions.ts`）：新建文件 / 新建文件夹 / 重命名 / 删除 / 复制绝对路径 / 复制相对路径，均基于 `workspace.fs`（兼容 remote / 虚拟文件系统），支持多级子目录自动创建父目录、名称合法性校验、删除前模态确认。侧边栏行内按钮与右键菜单均可触发。
+- **模板字符串转拼接**（`zeta.editor.templateToConcat`）：把含 `${...}` 表达式的模板字符串反向拆成字符串拼接（`` `hello ${name}` `` → `'hello ' + name`），无表达式的纯文本模板保持原样，多光标各自处理、同模板去重。
+- **裸模块跳转**：`import react from 'react'`、`pkg/subpath`、`@scope/pkg` 等裸模块说明符会解析 `node_modules` 中 `package.json` 的 `exports` / `main` / `module` 入口作为 F12 / Ctrl+点击跳转候选（支持 `pkg`、`pkg/subpath`、`@scope/pkg`、`@scope/pkg/subpath` 与 workspace / project 两级 `node_modules` 探测）。
+- **SCSS 命名空间补全**：`@use 'x' as c` 后，该文件 SCSS 变量仅在 `c.$var` 下提示，不再当全局裸变量干扰补全。
+- **变量一层解引用**：悬浮样式变量时，若其值引用了其他变量（`var(--x)` / `@y` / `$y`），再展开一层实际值（如 `--brand: var(--primary)` 追加 `--primary = #ff9500`）。
+- **`zeta.path.baseDir` 配置**：`@/` 别名与 `@/sub/path` 解析映射的基准目录，默认 `src`，可按项目改为 `lib`、`app` 等。
+
+### 变更
+
+- **颜色写回保持原格式**：点色块调色时，`provideColorPresentations` 识别原文格式（hex / rgb / hsl / hwb / lab / lch / oklab / oklch）并排到列表第一，避免「调个色相格式却被强制转成 hex」。
+- **vue `<style>` 变量引用色块**：`var(--x)` 引用纯色变量时在整个引用上显示色块，拾色器显示真实色值，可与普通色值一样调色并写回真实色值（用选中的格式整体替换 `var(--x)` 引用）。
+- **Vue 标签插入误触修复**：`zeta.editor.wrapTags` 在 vue 文档中若任一选区落在 `<script>` / `<style>` 块内则整体不触发（此前会在 TS 代码上包一层 HTML 标签破坏语法），仅在 `<template>` 区生效。
+- **JSX Fragment 支持**：标签扫描识别 `<>` / `</>` 空名 Fragment，正确配对（此前 `</>` 被误判为 selfClosing 而永不配对）。
+- **灰度色 NaN 修复**：纯灰/黑白等无饱和度的颜色，写回 `lch` / `oklch` / `hwb` 时色相归 0，不再产出 `NaN` 非法 CSS。
+- **符号链接位掩码处理**：`FileType` 是位掩码枚举（`SymbolicLink=64`），符号链接目录/文件（type 65/66）按位判断归类，不再被误判为非常规类型而静默过滤。
+
+### 修复
+
+- 文档关闭即清理其选区循环状态（`cycle-case.ts` 的 `clearCycleState`），避免长期会话中 key 无界积累。
+
+### 重构
+
+- 颜色扫描收敛：`scanPlainText` 的 hex / rgb / hsl 三段重复 while 循环与 `scanColor4` 合并为单个 `scanPattern`（模式 + 捕获组→颜色 的解析），新增格式只需加一行；hex 生成提取为共享 `toHexString` 消除变量分支与主流程重复。
+
+### 测试（开发基础设施，无运行时变更、不涉及版本号）
+
+- 新增性能基准：`parseStyleFile`（补全/悬浮/跳转公共底层）1MB 文本单遍扫描 < 300ms，防复杂度回潮；`pnpm test:perf` 增至 5 项。
+- 新增 `pnpm check` 脚本，串联 `typecheck` + `test` + `test:perf`，一条命令完成类型检查与单元/性能测试。
+
 ## [1.6.0] - 2026-08-19
 
 ### 新增
@@ -122,7 +182,7 @@
 
 - `findRootUri` 在 Windows 下大小写敏感比较失败 — 新增 `isSameUri`（win32 下 `fsPath.toLowerCase()` 比较）
 
-运行脚本 (`src/commands/run-script.ts`)：
+运行脚本 (`src/commands/run-package-script.ts`)：
 
 - `detectPackageManager` 改用 `isSameUri` 比较（Windows 大小写不敏感）
 - 脚本名含空格时加引号包裹、剥离 BOM（前序修复）
@@ -186,7 +246,7 @@
 
 - **资源导航**：拖拽添加目录、根目录父目录副标题、子节点缓存
 
-- **配置项**：`zeta.case.cycleOrder`、`zeta.runScript.askArguments`（关闭后选中脚本直接运行）
+- **配置项**：`zeta.case.cycleOrder`、`zeta.packageScript.askArguments`（关闭后选中脚本直接运行）
 
 ### 变更
 

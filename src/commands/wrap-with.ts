@@ -1,4 +1,4 @@
-import { indentUnit, leadingIndent } from '@/utils/edits';
+import { escapeSnippetText, indentUnit, leadingIndent } from '@/utils/edits';
 import * as vscode from 'vscode';
 
 /** 把选区扩展到整行：起点取行首，终点若恰好在下行行首则钳回上一行行尾 */
@@ -18,11 +18,6 @@ function indentBody(text: string, unit: string): string {
     .split(/\r?\n/)
     .map(line => (line.trim().length === 0 ? line : unit + line))
     .join(eol);
-}
-
-/** 转义 Snippet 语法保留字符（$、}、\），防止原代码内容被 Snippet 引擎误解析 */
-function escapeSnippetText(text: string): string {
-  return text.replace(/[$}\\]/g, '\\$&');
 }
 
 /**

@@ -55,3 +55,35 @@ export function appendStyleMixinDoc(md: vscode.MarkdownString, symbols: StyleDoc
     languageFromFilePath(symbols[0].filePath)
   );
 }
+
+/**
+ * 一层解引用：变量值里引用的其他变量（var(--x) / @y / $y）再展开一层实际值。
+ * 只在「引用的变量能查到且本身是纯值」时追加说明行，避免把复杂链无限展开。
+ * 例如 `--brand: var(--primary)` 悬浮时追加「--primary = #ff9500」。
+ */
+export function appendVarDeref(
+  md: vscode.MarkdownString,
+  symbols: StyleDocSymbol[],
+  allSymbols: StyleDocSymbol[]
+): void {
+  const derefLines: string[] = [];
+  const seen = new Set<string>();
+  for (const s of symbols) {
+    // 匹配 var(--x)、@y、$y 引用
+    const refRe = /(var\(\s*--[a-zA-Z0-9_-]+\s*\)|[@$][a-zA-Z0-9_-]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = refRe.exec(s.value)) !== null) {
+      const raw = m[1];
+      // 取变量名：var(--x) → --x；@y/$y → 去掉前缀。用捕获组提取，避免带上 ) 或前缀
+      const name = raw.startsWith('var(') ? (raw.match(/--[a-zA-Z0-9_-]+/) ?? [''])[0] : raw;
+      if (name === s.name || seen.has(name)) continue; // 跳过自引用与已展示
+      const target = allSymbols.find(t => t.name === name && isPureColor(t.value));
+      if (!target) continue;
+      seen.add(name);
+      derefLines.push(`\`${name}\` = \`${target.value}\``);
+    }
+  }
+  if (derefLines.length > 0) {
+    md.appendMarkdown('\n\n' + derefLines.join('  \n'));
+  }
+}

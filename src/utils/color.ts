@@ -1,4 +1,24 @@
-import { converter, parse } from 'culori';
+import { modeHsl, modeHwb, modeLab, modeLch, modeOklab, modeOklch, modeRgb, parse, useMode } from 'culori/fn';
+
+// culori/fn 不自动注册任何色彩空间，必须手动 useMode 注册实际用到的模式，
+// 相比默认入口 'culori'（顶部全量注册 26 个空间），体积显著更小。
+// useMode(modeX) 的返回值就是该模式的 converter（等价于 converter('rgb') 等），幂等可重复调用。
+useMode(modeRgb);
+useMode(modeHsl); // 供 parse() 识别 hsl() 输入（写回色块等场景）
+useMode(modeHwb);
+useMode(modeLab);
+useMode(modeLch);
+useMode(modeOklab);
+useMode(modeOklch);
+
+/** rgb 转换器：解析 hwb/lab/lch/oklab/oklch → rgb */
+const toRgb = useMode(modeRgb);
+/** 写回转换器：rgb → 各 CSS Color 4 格式 */
+const toHwb = useMode(modeHwb);
+const toLab = useMode(modeLab);
+const toLch = useMode(modeLch);
+const toOklab = useMode(modeOklab);
+const toOklch = useMode(modeOklch);
 
 /**
  * 颜色工具。hex/rgb/hsl 解析与 hsl 互转为本项目实现（无依赖）；
@@ -32,12 +52,8 @@ export function createColorSwatchUri(color: string): string {
 function toSvgColor(color: string): string {
   const parsed = parse(color);
   if (!parsed) return color;
-  const c = converter('rgb')(parsed);
-  const hex = (v: number) =>
-    Math.min(255, Math.max(0, Math.round(v * 255)))
-      .toString(16)
-      .padStart(2, '0');
-  return `#${hex(c.r)}${hex(c.g)}${hex(c.b)}`;
+  const c = toRgb(parsed);
+  return rgbToHex(c.r, c.g, c.b);
 }
 
 /**
@@ -175,9 +191,6 @@ export function parseHslColor(hStr: string, sStr: string, lStr: string, alpha?: 
 // 只做参数解析与范围校验，色彩空间转换（含 D50/D65 白点、LMS 矩阵）交给 culori，
 // 避免手写偏差（如 oklab 红色 g/b 分量不归零）。
 
-/** culori 各目标色彩空间的转换器（模块级复用） */
-const toRgb = converter('rgb');
-
 /** 把 culori 转换结果钳制到 0~1（lab/oklab 可能超出 sRGB 色域，超出取最近色） */
 function fromCulori(c: { r: number; g: number; b: number; alpha?: number }): ColorRgb {
   const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -278,8 +291,14 @@ function fmt2(v: number): string {
   return Number(v.toFixed(2)).toString();
 }
 
-/** 色相转 0~360 取整（用于 hwb / lch / oklch 写回） */
-function hueToDeg(h: number): number {
+/**
+ * 色相转 0~360 取整（用于 hwb / lch / oklch 写回）。
+ * 灰度色（r === g === b，如纯白/纯黑/纯灰）无饱和度，culori 转换结果的 h 为 undefined
+ * （色彩空间标准行为，色相在无饱和度时数学上未定义）。CSS Color 4 对无色相分量约定为 0，
+ * 这里对 undefined 归一为 0，避免 undefined % 360 → NaN 污染写回结果。
+ */
+function hueToDeg(h: number | undefined): number {
+  if (h === undefined) return 0;
   return Math.round(((h % 360) + 360) % 360);
 }
 
@@ -288,32 +307,41 @@ function alphaPart(a: number): string {
   return a < 1 ? ` / ${Number(a.toFixed(2))}` : '';
 }
 
+/** rgb(归一化 0~1) → hex `#rrggbb[aa]`；alpha<1 时追加透明度位 */
+export function rgbToHex(r: number, g: number, b: number, a = 1): string {
+  const toHex = (n: number) =>
+    clampChannel(Math.round(n * 255))
+      .toString(16)
+      .padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}${a < 1 ? toHex(a) : ''}`;
+}
+
 /** rgb(归一化 0~1) → hwb(h w% b%[ / a]) */
 export function rgbToHwb(r: number, g: number, b: number, a = 1): string {
-  const c = converter('hwb')({ mode: 'rgb', r, g, b, alpha: a });
-  return `hwb(${hueToDeg(c.h!)} ${fmt2(c.w * 100)}% ${fmt2(c.b * 100)}%${alphaPart(a)})`;
+  const c = toHwb({ mode: 'rgb', r, g, b, alpha: a });
+  return `hwb(${hueToDeg(c.h)} ${fmt2(c.w * 100)}% ${fmt2(c.b * 100)}%${alphaPart(a)})`;
 }
 
 /** rgb(归一化 0~1) → lab(L% a b[ / a]) */
 export function rgbToLab(r: number, g: number, b: number, a = 1): string {
-  const c = converter('lab')({ mode: 'rgb', r, g, b, alpha: a });
+  const c = toLab({ mode: 'rgb', r, g, b, alpha: a });
   return `lab(${fmt2(c.l)}% ${fmt2(c.a)} ${fmt2(c.b)}${alphaPart(a)})`;
 }
 
 /** rgb(归一化 0~1) → lch(L% C h[ / a]) */
 export function rgbToLch(r: number, g: number, b: number, a = 1): string {
-  const c = converter('lch')({ mode: 'rgb', r, g, b, alpha: a });
-  return `lch(${fmt2(c.l)}% ${fmt2(c.c)} ${hueToDeg(c.h!)}${alphaPart(a)})`;
+  const c = toLch({ mode: 'rgb', r, g, b, alpha: a });
+  return `lch(${fmt2(c.l)}% ${fmt2(c.c)} ${hueToDeg(c.h)}${alphaPart(a)})`;
 }
 
 /** rgb(归一化 0~1) → oklab(L% a b[ / a]) */
 export function rgbToOklab(r: number, g: number, b: number, a = 1): string {
-  const c = converter('oklab')({ mode: 'rgb', r, g, b, alpha: a });
+  const c = toOklab({ mode: 'rgb', r, g, b, alpha: a });
   return `oklab(${fmt2(c.l * 100)}% ${fmt2(c.a)} ${fmt2(c.b)}${alphaPart(a)})`;
 }
 
 /** rgb(归一化 0~1) → oklch(L% C h[ / a]) */
 export function rgbToOklch(r: number, g: number, b: number, a = 1): string {
-  const c = converter('oklch')({ mode: 'rgb', r, g, b, alpha: a });
-  return `oklch(${fmt2(c.l * 100)}% ${fmt2(c.c)} ${hueToDeg(c.h!)}${alphaPart(a)})`;
+  const c = toOklch({ mode: 'rgb', r, g, b, alpha: a });
+  return `oklch(${fmt2(c.l * 100)}% ${fmt2(c.c)} ${hueToDeg(c.h)}${alphaPart(a)})`;
 }

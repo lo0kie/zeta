@@ -129,21 +129,23 @@ export class ExplorerTreeViewProvider
     const treeItem = new vscode.TreeItem(nodeName, Collapsed);
     treeItem.resourceUri = uri.with({ scheme: 'zeta-file' });
 
+    // FileType 是位掩码（SymbolicLink=64），符号链接节点的 type 是 65/66，须按位判断。
+    const isFile = (type & File) !== 0;
+    const isDirectory = (type & Directory) !== 0;
+
     if (isRoot) {
       // 根目录默认展开，副标题显示父目录名便于区分同名目录
       treeItem.collapsibleState = Expanded;
       treeItem.description = basename(dirname(uri));
-    } else if (type === File) {
+    } else if (isFile) {
       treeItem.command = { arguments: [uri], command: 'vscode.open', title: '打开文件' };
       treeItem.collapsibleState = None;
     }
 
-    // contextValue 供右键菜单的 when 匹配：根目录带 directory-root- 前缀
-    const contextValueMap: Record<number, string> = {
-      [Directory]: 'directory',
-      [File]: 'file',
-    };
-    const prefix = isRoot ? 'directory-root' : (contextValueMap[type] ?? 'unknown');
+    // contextValue 供右键菜单的 when 匹配：根目录带 directory-root- 前缀；
+    // 符号链接目录/文件分别按 directory/file 归类，避免落到 unknown
+    const contextValue = isDirectory ? 'directory' : isFile ? 'file' : 'unknown';
+    const prefix = isRoot ? 'directory-root' : contextValue;
     treeItem.contextValue = `${prefix}-${nodeName}`;
 
     return treeItem;
@@ -173,12 +175,17 @@ export class ExplorerTreeViewProvider
       const files: IExplorerNode[] = [];
 
       for (const [dirname, fileType] of entries) {
-        // 过滤黑名单目录与非常规文件类型
-        if (this.filterRegExp.test(dirname) || (fileType !== File && fileType !== Directory)) {
+        // FileType 是位掩码枚举（File=1, Directory=2, SymbolicLink=64）：
+        // 符号链接指向文件时返回值是 65（File|SymbolicLink）、指向目录是 66（Directory|SymbolicLink）。
+        // 必须按位判断，否则符号链接目录/文件会被误判为「非常规类型」而静默过滤。
+        const isFile = (fileType & File) !== 0;
+        const isDirectory = (fileType & Directory) !== 0;
+        // 过滤黑名单目录与非常规文件类型（如设备、未知）
+        if (this.filterRegExp.test(dirname) || (!isFile && !isDirectory)) {
           continue;
         }
         const node: IExplorerNode = { uri: vscode.Uri.joinPath(element.uri, dirname), type: fileType };
-        if (fileType === File) files.push(node);
+        if (isFile) files.push(node);
         else folders.push(node);
       }
 

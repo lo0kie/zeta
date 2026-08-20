@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { collectImportedSymbols, getStyleBlocks } from './style-completion';
 import { STYLE_SYMBOL_LANGS } from './style-languages';
-import { appendStyleMixinDoc, appendStyleVariableDoc } from './style-markdown';
+import { appendStyleMixinDoc, appendStyleVariableDoc, appendVarDeref } from './style-markdown';
 
 // 可悬浮的符号词形：变量 @x $x / CSS 变量 --x / mixin（less .mixin-name、scss @mixin-name）；
 // [.#@$] 后允许 \w（字母数字下划线）、连字符与反斜杠转义（Tailwind 负值 .-mt-2、BEM 修饰符 ._hidden、arbitrary value .w-\[10px\]）。
@@ -63,6 +63,8 @@ export class StyleHoverProvider implements vscode.HoverProvider {
     // 多个命名空间（:root / .dark 等）全部展示，每行一个；代码块 + 下方纯色色块预览。
     // 渲染逻辑与 completion 共用（style-markdown）。
     appendStyleVariableDoc(md, matchedSymbols);
+    // 一层解引用：值里引用的变量（var(--x)/@y/$y）再展开一层实际值
+    appendVarDeref(md, matchedSymbols, symbols);
     return new vscode.Hover(md, range);
   }
 }

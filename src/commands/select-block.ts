@@ -8,9 +8,15 @@
  * 复用 scanStringTokens 与 maskComments 做字符串/正则/注释感知扫描，
  * 避免字符串、正则、注释里的括号干扰配对。
  */
+import { TtlCache } from '@/core/ttl-cache';
 import { scanStringTokens } from '@/utils/quote';
 import { maskComments } from '@/utils/text';
 import * as vscode from 'vscode';
+
+// 按 document.version 缓存「掩码文本 + 字符串 token」：命令连续触发时避免每次全文重扫。
+// 用 TtlCache（带容量上限），关闭文档的 key 由 onDidCloseTextDocument 清理。
+// 额外记录 text 并在命中时比对：规避某些环境（如单测 shim）version 不随编辑变化导致的误命中。
+const scanCache = new TtlCache<{ version: number; text: string; masked: string; tokens: [number, number][] }>(60_000);
 
 /** 括号对定义：开→闭，以及闭→开映射 */
 const OPEN = { '(': ')', '[': ']', '{': '}' } as const;
@@ -89,28 +95,43 @@ function findBlockFor(
   return [open + 1, close];
 }
 
-/** 找到包含 cursor 的块：最近括号（()/[]/{} 三种类型中取最靠右即最内层的一对）*/
-function findEnclosingBlock(
-  masked: string,
-  tokens: [number, number][],
-  cursor: number
-): [number, number] | null {
-  // findBlockFor 从右往左扫，遇「计数为 0 的候选开括号」立即返回，故多类型时取到的是最靠右（最内层）的一对。
+/**
+ * 找到包含 cursor 的块：最近括号（()/[]/{} 三种类型中取最靠右即最内层的一对）。
+ * 语义是「光标所在层级的括号块」：
+ * - 光标在对象值内 → 该值所属对象块（如 scripts 值内选 scripts 对象）；
+ * - 光标在键名/逗号后/顶层 → 键名所属外层对象（如 scripts 键名上选根对象，即 scripts 所在层级）。
+ */
+function findEnclosingBlock(masked: string, tokens: [number, number][], cursor: number): [number, number] | null {
   return findBlockFor(masked, tokens, cursor, ['(', '[', '{']);
+}
+
+export function clearSelectionBlockCache(uri: vscode.Uri): void {
+  scanCache.delete(uri.toString());
 }
 
 export default function selectBlock(textEditor: vscode.TextEditor): void {
   const { document, selections } = textEditor;
+  const uriKey = document.uri.toString();
   const text = document.getText();
-  // 注释等长掩码为空白，字符串原样保留；再扫描字符串 token 得到「不参与配对的区间」。
-  // 注释已掩码为空白，其内不可能出现 { }，故只需跳过字符串区间即可。
-  // 注意：Vue 动态属性（:class="[...]" 等）的值是 JS 表达式，其 token（isDynamicAttr）整段
-  // 不应视为字符串——否则 []/{}/() 全被跳过选不了。只过滤整段动态属性 token，
-  // 内部的真实字符串字面量（'is-icon-only' 等）会作为独立 STRING token 保留、继续跳过配对。
-  const masked = maskComments(text);
-  const tokens = scanStringTokens(masked)
-    .filter(t => !t.isDynamicAttr)
-    .map(t => [t.start, t.end] as [number, number]);
+  const cached = scanCache.get(uriKey);
+  const hit = cached && cached.version === document.version && cached.text === text;
+  let masked: string;
+  let tokens: [number, number][];
+  if (hit) {
+    masked = cached.masked;
+    tokens = cached.tokens;
+  } else {
+    // 注释等长掩码为空白，字符串原样保留；再扫描字符串 token 得到「不参与配对的区间」。
+    // 注释已掩码为空白，其内不可能出现 { }，故只需跳过字符串区间即可。
+    // 注意：Vue 动态属性（:class="[...]" 等）的值是 JS 表达式，其 token（isDynamicAttr）整段
+    // 不应视为字符串——否则 []/{}/() 全被跳过选不了。只过滤整段动态属性 token，
+    // 内部的真实字符串字面量（'is-icon-only' 等）会作为独立 STRING token 保留、继续跳过配对。
+    masked = maskComments(text);
+    tokens = scanStringTokens(masked)
+      .filter(t => !t.isDynamicAttr)
+      .map(t => [t.start, t.end] as [number, number]);
+    scanCache.set(uriKey, { version: document.version, text, masked, tokens });
+  }
 
   const seen = new Set<string>();
   const nextSelections: vscode.Selection[] = [];

@@ -1,6 +1,5 @@
-import { default as selectString } from '@/commands/select-string';
+import selectString from '@/commands/select-string';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test } from 'vitest';
 import { Position, Selection } from 'vscode';
 import { editorWith, makeDocument, setConfig } from './helpers';

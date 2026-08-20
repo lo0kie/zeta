@@ -1,13 +1,9 @@
 import { Configuration } from '@/core/configuration';
-import { TextEdit } from '@/utils/edits';
+import { escapeSnippetText, indentUnit, TextEdit } from '@/utils/edits';
+import { nonTemplateBlocks } from '@/utils/vue-blocks';
 import * as vscode from 'vscode';
 
 type OrderedEdit = TextEdit & { order: number };
-
-/** 转义 Snippet 保留字符，防止标签名/属性/原文中的 $、}、\ 破坏 Snippet 模板 */
-function escapeSnippetText(text: string): string {
-  return text.replace(/[$}\\]/g, '\\$&');
-}
 
 /** 按出现顺序记录一次插入（order 用于同偏移量下的稳定排序） */
 function pushInsert(edits: OrderedEdit[], offset: number, text: string): void {
@@ -102,6 +98,19 @@ export default async function tagsWrap(textEditor: vscode.TextEditor): Promise<v
   const { document, selections, options } = textEditor;
   if (selections.length === 0) return;
 
+  // Vue：仅在 <template> 区插入 HTML 标签。若任一选区落在 <script>/<style> 块内则整体不触发——
+  // 否则在 script 的 TS 代码上包一层 HTML 标签会破坏语法，是真实误触。
+  if (document.languageId === 'vue') {
+    const blocks = nonTemplateBlocks(document.getText());
+    if (blocks.length > 0) {
+      const anyInScriptStyle = selections.some(sel => {
+        const offset = document.offsetAt(sel.start);
+        return blocks.some(([s, e]) => offset >= s && offset <= e);
+      });
+      if (anyInScriptStyle) return;
+    }
+  }
+
   const tagName = Configuration.TAG;
   const cleanedName = tagName.trim();
   // 空/纯空白配置回退到 div；标签名与属性均做 snippet 转义，防止 $、}、\ 破坏 Snippet 模板
@@ -112,7 +121,7 @@ export default async function tagsWrap(textEditor: vscode.TextEditor): Promise<v
   // 去掉尾部空白——配置若带尾随空格（如 "div "），snippet 里标签名后会多出空格，
   // 选中标签名按 Tab 时会停在空格位置，干扰改名
   const restAttrs = tagStart >= 0 ? tagName.slice(tagStart + openName.length).replace(/\s+$/, '') : '';
-  const tabSize = options.insertSpaces ? ' '.repeat(Number(options.tabSize || 2)) : '\t';
+  const tabSize = indentUnit(options);
   const originalText = document.getText();
   const offsetOf = (pos: vscode.Position) => document.offsetAt(pos);
 

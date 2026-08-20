@@ -1,4 +1,4 @@
-import { default as cycleCase } from '@/commands/cycle-case';
+import cycleCase, { clearCycleState } from '@/commands/cycle-case';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import * as vscode from 'vscode';
@@ -263,5 +263,28 @@ test('cycleCase: 跨行选区与同行选区混用时仅同行选区转换', asy
     assert.equal(edits.length, 1, '仅同行选区 baz_qux 转换');
     // baz_qux（snake）非任何已知格式，cycleCase 首次从第 1 个格式 Camel 起找新文本 → bazQux
     assert.equal(edits[0].text, 'bazQux');
+  }
+});
+
+// 文档关闭后其循环状态被清理：同一 uri 的 key 删除，下次调用重新初始化（从最初文本再次开始循环）。
+test('clearCycleState: 清理后同一文档循环状态重置', async () => {
+  setConfig({ 'zeta.case.cycleOrder': ['Camel Case', 'Kebab Case'] });
+  {
+    const uri = '/virtual/ccClear.ts';
+    const step = async (text: string) => {
+      const doc = makeDocument(text, uri, 'typescript');
+      // 选中 'fooBar'（6 字符，不含空格）
+      const editor = editorWith(doc, new Selection(new Position(0, 0), new Position(0, 6)));
+      globalThis.__lastApply = null;
+      await cycleCase(editor, noopEdit);
+      return lastApply()[0].text;
+    };
+
+    // 建立状态：fooBar → foo-bar（第 1 步）
+    assert.equal(await step('fooBar x'), 'foo-bar');
+    // 模拟文档关闭：清理该 uri 的状态
+    clearCycleState(vscode.Uri.file(uri));
+    // 再打开同一 uri（模拟重新打开文档）：状态已重置，应回到第 1 步而非继续循环
+    assert.equal(await step('fooBar x'), 'foo-bar', '清理后循环状态重置，从第 1 步重新开始');
   }
 });

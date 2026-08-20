@@ -1,9 +1,8 @@
-import { default as selectBlock } from '@/commands/select-block';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
 import { test } from 'vitest';
 import { Position, Selection } from 'vscode';
 import { editorWith, makeDocument, setConfig } from './helpers';
+import selectBlock from '@/commands/select-block';
 
 /** 生成一个以 offset 处的光标（空选区） */
 function caret(doc: { positionAt: (o: number) => Position }, offset: number): Selection {
@@ -19,7 +18,11 @@ test('select-block: 光标在 if 块体内时只选中块内容（不含 if 声�
     const editor = editorWith(doc, caret(doc, text.indexOf('xxxxxx') + 3));
     selectBlock(editor);
     assert.equal(editor.selections.length, 1);
-    assert.equal(doc.getText(editor.selections[0]), `\n  start\n  xxxxxx\n  end\n`, '只选块内容，不含 if (condition) 与括号');
+    assert.equal(
+      doc.getText(editor.selections[0]),
+      `\n  start\n  xxxxxx\n  end\n`,
+      '只选块内容，不含 if (condition) 与括号'
+    );
   }
 });
 
@@ -208,10 +211,95 @@ test('select-block: Vue 动态属性内光标在数组处选中数组块', () =>
     const editor = editorWith(doc, caret(doc, text.indexOf('themeClass') + 2));
     selectBlock(editor);
     assert.equal(editor.selections.length, 1, '光标在数组内应命中块');
+    assert.equal(doc.getText(editor.selections[0]), `sizeClass, themeClass, { active: isActive }`, '选中数组内容');
+  }
+});
+
+test('select-block: JSON 光标在对象键值块内时选中该块内容', () => {
+  setConfig({});
+  {
+    const text = `{\n  "name": "zeta",\n  "scripts": {\n    "dev": "tsup --watch",\n    "test": "vitest run"\n  }\n}`;
+    const doc = makeDocument(text, '/virtual/package.json', 'json');
+    // 光标在 scripts 内某脚本值里 → 最近括号是 scripts 的 {}，选中其内容
+    const editor = editorWith(doc, caret(doc, text.indexOf('tsup --watch') + 2));
+    selectBlock(editor);
+    assert.equal(editor.selections.length, 1);
     assert.equal(
       doc.getText(editor.selections[0]),
-      `sizeClass, themeClass, { active: isActive }`,
-      '选中数组内容'
+      `\n    "dev": "tsup --watch",\n    "test": "vitest run"\n  `,
+      '光标在对象值内时选中该对象块内容，而非外层根对象'
+    );
+  }
+});
+
+test('select-block: JSON 光标在对象键名上时选中该键名所在层级（外层对象）', () => {
+  setConfig({});
+  {
+    const text = `{\n  "name": "zeta",\n  "scripts": {\n    "dev": "tsup --watch"\n  }\n}`;
+    const doc = makeDocument(text, '/virtual/package.json', 'json');
+    // 光标在 "scripts" 键名上 → 键名属于外层根对象，应选中根对象（scripts 所在层级），而非 scripts 值块
+    const editor = editorWith(doc, caret(doc, text.indexOf('scripts')));
+    selectBlock(editor);
+    assert.equal(editor.selections.length, 1);
+    assert.equal(
+      doc.getText(editor.selections[0]),
+      `\n  "name": "zeta",\n  "scripts": {\n    "dev": "tsup --watch"\n  }\n`,
+      '光标在键名上时选中其所在层级（外层对象），而非内层值块'
+    );
+  }
+});
+
+test('select-block: JSON 光标在对象开括号前时选中该键名所在层级（外层对象）', () => {
+  setConfig({});
+  {
+    const text = `{\n  "name": "zeta",\n  "scripts": {\n    "dev": "tsup --watch"\n  }\n}`;
+    const doc = makeDocument(text, '/virtual/package.json', 'json');
+    // 光标在 scripts 的冒号后（开括号前）→ 属外层根对象，应选中根对象
+    const editor = editorWith(doc, caret(doc, text.indexOf('"scripts"') + '"scripts"'.length + 1));
+    selectBlock(editor);
+    assert.equal(editor.selections.length, 1);
+    assert.equal(
+      doc.getText(editor.selections[0]),
+      `\n  "name": "zeta",\n  "scripts": {\n    "dev": "tsup --watch"\n  }\n`,
+      '光标在开括号前时选中其所在层级（外层对象），而非内层值块'
+    );
+  }
+});
+
+test('select-block: JSON 光标在对象值内、右侧有另一对象时，不误命中右侧对象', () => {
+  setConfig({});
+  {
+    // 模拟 fret-logic：scripts 之后紧跟 dependencies，光标在 scripts 值内
+    const text = `{\n  "scripts": {\n    "dev": "vite",\n    "build": "vue-tsc && vite build"\n  },\n  "dependencies": {\n    "vue": "3.5.11",\n    "tone": "^15.1.22"\n  }\n}`;
+    const doc = makeDocument(text, '/virtual/package.json', 'json');
+    // 光标在 scripts 的 build 值内 → 应选中 scripts 块，而非跨过 scripts } 命中 dependencies
+    const editor = editorWith(doc, caret(doc, text.indexOf('vue-tsc && vite build') + 2));
+    selectBlock(editor);
+    assert.equal(editor.selections.length, 1);
+    const sel = doc.getText(editor.selections[0]);
+    assert.ok(sel.includes('"dev"'), '应包含 scripts 内容');
+    assert.ok(sel.includes('"build"'), '应包含 scripts 内容');
+    assert.ok(!sel.includes('"dependencies"'), '不应误选右侧 dependencies 对象');
+    assert.ok(!sel.includes('"vue"'), '不应包含 dependencies 内容');
+  }
+});
+
+test('select-block: JSON 光标在根对象直接子属性的值内，选中根对象而非误命中右侧 scripts', () => {
+  setConfig({});
+  {
+    // 模拟 fret-logic：private 之后隔 version/type 才到 scripts
+    const text = `{\n  "private": true,\n  "version": "1.0.0",\n  "type": "module",\n  "scripts": {\n    "dev": "vite"\n  }\n}`;
+    const doc = makeDocument(text, '/virtual/package.json', 'json');
+    // 光标在 private 的 true 值内 → 应选中根对象内容（含 scripts），而非只命中 scripts 对象
+    const editor = editorWith(doc, caret(doc, text.indexOf('true') + 2));
+    selectBlock(editor);
+    assert.equal(editor.selections.length, 1);
+    // 光标在根对象直接子属性（private）的值内 → 选中的应是根对象完整内容（含 private/version/scripts），
+    // 而非误命中右侧的 scripts 对象、只选中 scripts 内容。
+    assert.equal(
+      doc.getText(editor.selections[0]),
+      `\n  "private": true,\n  "version": "1.0.0",\n  "type": "module",\n  "scripts": {\n    "dev": "vite"\n  }\n`,
+      '光标在根对象子属性值内应选中根对象内容，而非误命中右侧 scripts 对象'
     );
   }
 });

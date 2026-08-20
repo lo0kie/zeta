@@ -1,6 +1,7 @@
 import { escapeRegExp } from '@/core/strings';
 import { collectImportedSymbols, getStyleBlocks } from '@/providers/style-completion';
-import { buildLineStarts, lineOf } from '@/utils/text';
+import { buildLineStarts, lineOf, maskCommentsAndStrings } from '@/utils/text';
+import { scopeAtOffset } from '@/providers/style-color';
 import * as vscode from 'vscode';
 import { STYLE_SYMBOL_LANGS } from './style-languages';
 
@@ -24,9 +25,7 @@ export function findDefinitionRange(text: string, word: string): vscode.Range | 
  * 返回的是匹配行「行尾」位置，即 VS Code 跳到该定义后的光标落点。
  */
 export function findDefinitionRanges(text: string, word: string): vscode.Range[] {
-  const cleanText = text.replace(/(['"`])(?:\\.|[^\\\r\n])*?(?:\1|\r?\n|$)|\/\*[\s\S]*?(?:\*\/|$)|\/\/.*/g, match =>
-    match.replace(/[^\r\n]/g, ' ')
-  );
+  const cleanText = maskCommentsAndStrings(text);
 
   let pattern: RegExp;
   // 注意：所有正则均增加 'g' 标志以支持跨行全局搜索
@@ -103,8 +102,15 @@ export class StyleDefinitionProvider implements vscode.DefinitionProvider {
     // 直接定位（ParsedSymbol），不再对每个定义文件做 findDefinitionRanges 全文正则。
     if (word.startsWith('@') || word.startsWith('$') || word.startsWith('--')) {
       const symbols = await collectImportedSymbols(document);
-      const matchedSymbols = symbols.filter(s => s.name === word);
+      let matchedSymbols = symbols.filter(s => s.name === word);
       if (matchedSymbols.length === 0) return undefined;
+
+      // CSS 变量（--x）多定义时按引用处作用域优先：引用点在 .dark 内时优先跳 .dark 的定义，
+      // 与色块的「上下文感知」一致，而不是把同名所有定义并列返回/固定跳第一个。
+      if (word.startsWith('--')) {
+        const refScope = scopeAtOffset(document.getText(), document.offsetAt(position));
+        matchedSymbols = sortByScopePriority(matchedSymbols, refScope);
+      }
 
       const seen = new Set<string>();
       for (const s of matchedSymbols) {
@@ -152,4 +158,25 @@ export function registerStyleDefinition(): vscode.Disposable {
   const provider = new StyleDefinitionProvider();
   const selectors = STYLE_SYMBOL_LANGS.map(language => ({ language, scheme: 'file' }));
   return vscode.languages.registerDefinitionProvider(selectors, provider);
+}
+
+/**
+ * 多定义 CSS 变量按「引用处作用域」排序，命名空间匹配的定义排在最前。
+ * 与 style-color 的上下文感知一致，优先级：
+ * 1. scope 与引用作用域完全一致
+ * 2. 定义 scope 是引用作用域的前缀（引用 .dark .a，定义 .dark）
+ * 3. 全局（:root / 空 scope）
+ * 4. 其余按原顺序
+ */
+function sortByScopePriority<T extends { scope?: string }>(symbols: T[], refScope: string): T[] {
+  const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
+  const ref = norm(refScope);
+  const score = (s: T): number => {
+    const def = norm(s.scope ?? '');
+    if (def === ref) return 0; // 完全一致
+    if (def && ref && (ref === def || ref.startsWith(def + ' ') || ref.startsWith(def + '>'))) return 1; // 前缀
+    if (def === ':root' || def === '') return 2; // 全局
+    return 3;
+  };
+  return [...symbols].sort((a, b) => score(a) - score(b));
 }

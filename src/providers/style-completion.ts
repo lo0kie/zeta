@@ -7,6 +7,7 @@ import { resolveAliasCandidates } from '@/core/path-alias';
 import { getCachedProbe, probeKey, setCachedProbe } from '@/core/probe-cache';
 import { TtlCache } from '@/core/ttl-cache';
 import { isPureColor } from '@/utils/color';
+import { inHtmlComment } from '@/utils/vue-blocks';
 import * as vscode from 'vscode';
 import { STYLE_COMPLETION_LANGS, STYLE_LANGUAGES } from './style-languages';
 import { appendStyleMixinDoc, appendStyleVariableDoc } from './style-markdown';
@@ -244,9 +245,8 @@ export function getStyleBlocks(
 
   while ((match = styleRegex.exec(text)) !== null) {
     // 跳过被 HTML 注释包裹的 <style>（<!-- <style>...</style> --> 临时禁用场景），
-    // 注释内残缺标签不应被当成真实样式块；判定方式与 tag.ts 的 <!-- --> 跳过同思路
-    const commentStart = text.lastIndexOf('<!--', match.index);
-    if (commentStart !== -1 && commentStart > text.lastIndexOf('-->', match.index)) continue;
+    // 注释内残缺标签不应被当成真实样式块；判定方式与 tags-wrap 的 nonTemplateBlocks 共用
+    if (inHtmlComment(text, match.index)) continue;
 
     const attrs = match[1];
     const content = match[2];
@@ -387,6 +387,19 @@ export async function collectImportedSymbols(document: vscode.TextDocument): Pro
     allSymbols.push(...parseStyleFile(block.content, document.uri.fsPath, block.lang).symbols);
   }
 
+  // SCSS 命名空间：扫描当前文档的 `@use 'path' as alias`，把该文件变量标记为「仅经 alias.$var 访问」。
+  // 仅处理顶层显式 as 别名；无 as 的 @use（如 `@use './vars'`）保持现状（变量裸提示，宽松兼容）。
+  const namespaceByUri = new Map<string, string>();
+  for (const block of getStyleBlocks(document)) {
+    if (block.lang !== 'scss' && block.lang !== 'sass') continue;
+    const useAsRe = /@use\s+['"]([^'"]+)['"]\s+as\s+([a-zA-Z_][\w-]*)/g;
+    let m: RegExpExecArray | null;
+    while ((m = useAsRe.exec(block.content)) !== null) {
+      const target = await resolveImportUri(document.uri, m[1]);
+      if (target) namespaceByUri.set(target.toString(), m[2]);
+    }
+  }
+
   for (const uri of importedUris) {
     const uriStr = uri.toString();
     if (visited.has(uriStr)) continue;
@@ -395,7 +408,13 @@ export async function collectImportedSymbols(document: vscode.TextDocument): Pro
     try {
       // 统一文件解析缓存（符号 + 选择器定义 + 规则块一份对象），避免与 style-index 各扫一遍
       const parsed = await getParsedFile(uri, readFileTextCached);
-      allSymbols.push(...parsed.symbols);
+      const ns = namespaceByUri.get(uriStr);
+      if (ns) {
+        // 该文件经 `@use ... as c` 导入：scss 变量打上命名空间，裸补全时应排除
+        allSymbols.push(...parsed.symbols.map(s => (s.kind === 'scss-variable' ? { ...s, namespace: ns } : s)));
+      } else {
+        allSymbols.push(...parsed.symbols);
+      }
     } catch {
       continue;
     }
@@ -486,7 +505,17 @@ export class StyleCompletionProvider implements vscode.CompletionItemProvider {
         return false;
       }
       if (isTriggerDot) return isLessLang && sym.kind === 'mixin';
-      if (isTriggerDollar) return isScssLang && sym.kind === 'scss-variable';
+      if (isTriggerDollar) {
+        if (!isScssLang || sym.kind !== 'scss-variable') return false;
+        // 命名空间分流：`@use 'x' as c` 后变量需经 `c.$var` 访问。
+        // - 输入 `c.$...` → 只返回该命名空间变量；
+        // - 裸 `$...` → 排除所有带命名空间的变量（不把命名空间导入当全局变量提示）。
+        const dollarIndex = textBeforeCursor.lastIndexOf('$');
+        const beforeDollar = dollarIndex > 0 ? textBeforeCursor.slice(0, dollarIndex) : '';
+        const nsMatch = beforeDollar.match(/([a-zA-Z_][\w-]*)\.$/);
+        if (nsMatch) return sym.namespace === nsMatch[1];
+        return !sym.namespace;
+      }
       return false;
     });
     if (filteredSymbols.length === 0) return undefined;

@@ -149,7 +149,7 @@ export class PathCompletionProvider implements vscode.CompletionItemProvider {
         vscode.workspace.getWorkspaceFolder(document.uri)?.uri ?? (await findProjectRootUri(document.uri));
       if (!baseUri) return undefined;
       const subPath = searchDir.replace(/^@\/?/, '');
-      return vscode.Uri.joinPath(baseUri, 'src', subPath);
+      return vscode.Uri.joinPath(baseUri, Configuration.PATH_BASE_DIR, subPath);
     }
 
     // 绝对 / 与 ~/：浏览「最后一个 / 之前」的目录，无子路径时回到工作区根

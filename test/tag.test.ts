@@ -127,3 +127,25 @@ test('scanTagPairs: 多属性与自闭合混合', () => {
   assert.equal(siblings.length, 2);
   assert.deepEqual(names(siblings).sort(), ['div', 'p']);
 });
+
+test('scanTagPairs: JSX Fragment（<>...</>）被识别并配对', () => {
+  const text = '<>\n  <div>hi</div>\n</>';
+  const pairs = scanTagPairs(text);
+  assert.equal(pairs.length, 2, 'Fragment 与内层 div 各一对');
+  const frag = pairs.find(p => p.open.name === '');
+  assert.ok(frag, '存在空名 Fragment 对');
+  assert.equal(text.slice(frag!.open.start, frag!.open.end), '<>');
+  assert.equal(text.slice(frag!.close.start, frag!.close.end), '</>');
+  // 普通标签名非空，不与 Fragment 混淆
+  const div = pairs.find(p => p.open.name === 'div');
+  assert.ok(div);
+});
+
+test('scanTagPairs: Fragment 与普通标签嵌套互不干扰', () => {
+  const text = '<><span>x</span><>y</></>';
+  const pairs = scanTagPairs(text);
+  // 两个 Fragment 对 + 一个 span 对
+  assert.equal(pairs.length, 3);
+  const frags = pairs.filter(p => p.open.name === '');
+  assert.equal(frags.length, 2, '两个 Fragment 各自配对');
+});

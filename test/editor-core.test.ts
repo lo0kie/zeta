@@ -1,11 +1,11 @@
 import { registerCommand, registerTextEditorCommand } from '@/core/command';
-import { default as Editor } from '@/core/editor';
 import { escapeRegExp, toNormalizePath } from '@/core/strings';
 import assert from 'node:assert/strict';
 import { join, normalize } from 'node:path';
 import { test, vi } from 'vitest';
 import * as vscode from 'vscode';
 import { cleanup, makeDocument, makeWorkspace, setConfig } from './helpers';
+import Editor from '@/core/editor';
 
 const { Position, Range } = vscode;
 

@@ -38,3 +38,14 @@ export function lineOf(lineStarts: number[], offset: number): number {
 export function maskComments(content: string): string {
   return content.replace(/\/\*[\s\S]*?(?:\*\/|$)|\/\/[^\r\n]*/g, match => match.replace(/[^\r\n]/g, ' '));
 }
+
+/**
+ * 将注释与字符串字面量都替换为等长空白（换行保留）。
+ * 与 maskComments 的区别：字符串也被掩码（`'...'`/`"..."`/`` `...` ``）。
+ * 用于「注释与字符串内容都不该参与匹配、且需保持偏移」的扫描（如符号定义提取）。
+ */
+export function maskCommentsAndStrings(content: string): string {
+  return content.replace(/(['"`])(?:\\.|[^\\\r\n])*?(?:\1|\r?\n|$)|\/\*[\s\S]*?(?:\*\/|$)|\/\/.*/g, match =>
+    match.replace(/[^\r\n]/g, ' ')
+  );
+}
